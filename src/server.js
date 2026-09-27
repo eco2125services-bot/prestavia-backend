@@ -7,6 +7,12 @@ const authRoutes = require("./routes/auth.routes");
 
 const app = express();
 
+// Render (y la mayoría de plataformas cloud) ponen la app detrás de un
+// proxy inverso, que agrega el header X-Forwarded-For con la IP real del
+// visitante. Sin esto, express-rate-limit no puede confiar en esa IP para
+// contar intentos de login por persona, y tira una advertencia en los logs.
+app.set("trust proxy", 1);
+
 app.use(helmet());
 app.use(cors()); // en producción, restringir a los dominios reales del frontend
 app.use(express.json());
