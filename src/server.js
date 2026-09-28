@@ -6,6 +6,8 @@ const helmet = require("helmet");
 const authRoutes = require("./routes/auth.routes");
 const marketplaceRoutes = require("./routes/marketplace.routes");
 const contratoRoutes = require("./routes/contrato.routes");
+const pagosRoutes = require("./routes/pagos.routes");
+const adminRoutes = require("./routes/admin.routes");
 
 const app = express();
 
@@ -17,7 +19,9 @@ app.set("trust proxy", 1);
 
 app.use(helmet());
 app.use(cors()); // en producción, restringir a los dominios reales del frontend
-app.use(express.json());
+// Límite elevado (por defecto son ~100kb): los comprobantes de pago llegan
+// como imágenes/PDFs codificados en base64 dentro del cuerpo JSON.
+app.use(express.json({ limit: "15mb" }));
 
 app.get("/health", (req, res) => {
   res.status(200).json({ ok: true, servicio: "prestavia-backend" });
@@ -26,6 +30,8 @@ app.get("/health", (req, res) => {
 app.use("/auth", authRoutes);
 app.use("/marketplace", marketplaceRoutes);
 app.use("/contratos", contratoRoutes);
+app.use("/pagos", pagosRoutes);
+app.use("/admin", adminRoutes);
 
 // Manejador de errores de último recurso — nunca debe filtrar detalles
 // internos al cliente.

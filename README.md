@@ -122,6 +122,51 @@ generan correctamente (contenido, cláusulas legales, QR de verificación, y
 firmas visibles), la descarga del PDF respeta que solo las partes
 involucradas puedan verlo, y la operación pasa a "Por_Desembolsar".
 
+## Módulo 4 — Pagos y cobranzas
+
+Reemplaza `RecepcionPagos.gs`, `PagoComision.gs` y `ActualizacionCobranzas.gs`
+(y la parte de `Amortizacion.gs` que genera la tabla de cuotas real). Es el
+módulo que conecta todo el ciclo: comisión de plataforma → autorización de
+desembolso → generación de cuotas → reporte y validación de pagos → cierre
+del préstamo.
+
+**Introduce el rol Admin por primera vez** (ya existía en el esquema de la
+base de datos, pero ningún módulo anterior tenía rutas para él). Todo lo
+que cuelga de `/admin/*` exige que el usuario autenticado tenga
+`rol = 'Admin'` en la tabla `usuarios` — si necesitas convertir tu propio
+usuario en Admin para probarlo, corre en el SQL Editor de Neon:
+```sql
+UPDATE usuarios SET rol = 'Admin' WHERE email = 'TU_EMAIL_DE_ADMIN';
+```
+
+Rutas para el **Prestatario**:
+- `GET /pagos/mis-cuotas` — todas sus cuotas pendientes, en todos sus préstamos.
+- `GET /pagos/resumen/:idOp` — cuotas pendientes/vencidas y saldo total de un préstamo específico.
+- `POST /pagos/reportar` — `{ idPago, montoPagado, metodoPago, referencia, archivoBase64?, archivoMimeType?, archivoNombre? }`. Reporta el pago de una cuota (con comprobante opcional). Queda "Pendiente" de validación.
+
+Rutas para el **Prestamista**:
+- `POST /pagos/comision/reportar` — `{ idOportunidad, montoPagado, metodoPago, referencia, archivoBase64?, ... }`. Reporta el pago de la comisión de originación (5%), retenida del monto del préstamo.
+- `GET /pagos/comision/pendiente` — encuentra automáticamente si tiene alguna operación esperando ese pago (para auto-llenar el formulario).
+
+Rutas para el **Admin**:
+- `GET /admin/comisiones/pendientes` / `POST /admin/comisiones/:idComision/aprobar` — aprobar o rechazar la comisión reportada por el prestamista.
+- `POST /admin/prestamos/:idOp/autorizar-desembolso` — solo funciona si la comisión ya está aprobada. Pasa la operación a "En_Cobro", bloquea la garantía, y genera automáticamente la tabla de amortización real (todas las cuotas en `control_pagos`, con candado anti-duplicados).
+- `GET /admin/pagos/pendientes` / `POST /admin/pagos/:idTransaccion/validar` — aprobar o rechazar un pago de cuota reportado. Al aprobar, aplica el monto contra las cuotas pendientes en orden (cuotas completas → "Pagado"; un remanente que no alcanza para una cuota entera se aplica como abono adelantado). Si ya no quedan cuotas pendientes, cierra el préstamo ("Pagada"), libera la garantía, y bonifica la reputación de ambas partes (+5 por cada cuota pagada a tiempo, +25 al prestatario y +15 al prestamista por completar el préstamo).
+
+Descarga de comprobantes: `GET /pagos/comprobante/:idComprobante` (misma
+decisión de guardar el contenido en Neon en vez de Drive, ver más abajo).
+
+Probado localmente de punta a punta contra Postgres real, simulando el
+ciclo completo con 3 usuarios (prestamista, prestatario, admin): el
+desembolso no se autoriza si la comisión no está aprobada; al aprobarla y
+autorizar, se genera la tabla de amortización correcta y no se duplica si
+se intenta de nuevo; el prestatario reporta un pago con comprobante, el
+admin lo valida y la cuota queda "Pagada"; un pago que cubre varias cuotas
+de una vez las marca todas y cierra el préstamo, libera la garantía, y
+bonifica la reputación y el contador de préstamos exitosos de ambas
+partes; los controles de acceso por rol (Prestatario/Prestamista/Admin)
+funcionan correctamente en cada ruta.
+
 ## ⚠️ Antes de desplegar el módulo 3: correr una migración en Neon
 
 Este módulo necesita una tabla nueva (`documentos_generados`) que no existe
@@ -137,6 +182,19 @@ Solo hace falta correrlo **una vez**. Si despliegas el código antes de
 correr esta migración, el módulo de contratos fallará (la tabla no
 existirá) — el resto de la app (auth, marketplace) seguirá funcionando
 normal.
+
+## ⚠️ Antes de desplegar el módulo 4: correr OTRA migración en Neon
+
+Mismo patrón: este módulo necesita la tabla `comprobantes_pago` (para
+guardar las fotos/PDFs de comprobantes de pago, igual que los contratos se
+guardan en `documentos_generados`).
+
+1. Entra al **SQL Editor** de Neon.
+2. Abre `sql/003_comprobantes_pago.sql` y pega su contenido.
+3. Ejecútalo.
+
+También una sola vez. Si despliegas antes de correrla, solo el módulo de
+pagos/cobranzas fallará — el resto sigue funcionando.
 
 ## Cómo correrlo tú (local, antes de desplegar)
 
@@ -179,7 +237,7 @@ Por ahora, para arrancar gratis, es aceptable.
 1. ~~Auth (login + re-hasheo)~~ ✅ desplegado en producción
 2. ~~Marketplace + contraofertas (`Marketplace.gs`)~~ ✅ este entregable (falta desplegar)
 3. ~~Generación de contratos (`GeneradorContratos.gs`)~~ ✅ este entregable (falta desplegar)
-4. Pagos y cobranzas (`RecepcionPagos.gs`, `ActualizacionCobranzas.gs`)
+4. ~~Pagos y cobranzas (`RecepcionPagos.gs`, `ActualizacionCobranzas.gs`)~~ ✅ este entregable (falta desplegar)
 5. Registro de usuarios + documentos + IA (`GestionUsuarios.gs`, `DocumentosUsuario.gs`, `AuditoriaIA.gs`)
 6. Admin panel (`AdminPanel.gs`, `AdminPanelRootBackend.gs`)
 7. Cron de mora y vencimientos de suscripción (`CronPlanificadores.gs`) — en
