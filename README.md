@@ -66,6 +66,78 @@ acepta y la operación queda "Financiada" con cuota calculada correctamente,
 `mis-solicitudes` / `mis-prestamos` reflejan el préstamo financiado, y
 `solicitar-documentos` / `documentos/:idOp` responden bien.
 
+## Módulo 3 — Generación de contratos
+
+Reemplaza `GeneradorContratos.gs`. Genera el PDF del contrato de mutuo y un
+pagaré digital cuando el prestamista asignado lo confirma sobre una
+operación ya "Financiada".
+
+**Decisión de arquitectura importante (la acordamos juntos antes de
+construir este módulo):** en Apps Script, los PDFs se guardaban en Google
+Drive. Aquí, para no depender de una cuenta de Drive ni de un servicio de
+almacenamiento adicional, **los PDFs se guardan directamente en tu base de
+datos de Neon** (como contenido binario, en la tabla nueva
+`documentos_generados`). Por eso este módulo trae un archivo SQL adicional
+que hay que correr en Neon antes de desplegar (ver más abajo,
+"Antes de desplegar este módulo").
+
+- `POST /contratos/generar` (rol Prestamista) — `{ idOp, firma }`. Solo lo
+  puede ejecutar el prestamista asignado a esa operación. Genera el
+  contrato + el pagaré, calcula los hashes de firma (SHA-256), inserta un
+  código QR de verificación en el contrato, y avanza la operación a
+  "Por_Desembolsar". Si ya existe un contrato para esa operación, no
+  duplica — devuelve un aviso.
+- `GET /contratos/oportunidad/:idOp` — metadatos del contrato de una
+  operación (fecha de firma, hash, links a los PDFs).
+- `GET /contratos/documento/:idDocumento` — descarga el PDF real (contrato
+  o pagaré). Solo pueden descargarlo el prestatario y el prestamista
+  involucrados en esa operación (o un Admin).
+
+**Nota sobre el disparador de este módulo:** en Apps Script, el contrato se
+generaba automáticamente cuando el prestamista APROBABA los documentos de
+identidad y garantía que subía el prestatario (con revisión de IA de por
+medio) — ese módulo de documentos + IA todavía no está construido (es el
+siguiente en la lista, módulo 5). Por ahora, `POST /contratos/generar` es
+la acción directa que hace el prestamista para generar el contrato, sin
+esa revisión previa de documentos. Cuando construyamos el módulo de
+documentos + IA, ese módulo llamará a este mismo servicio en vez de
+duplicar la lógica, y quedará detrás de la aprobación real de documentos.
+
+**Dos cosas pendientes que te aviso desde ya, para que no te tomen por
+sorpresa (igual que con el correo del módulo 2):**
+1. **Correos** (aviso al admin, al prestatario y al prestamista sobre la
+   comisión) — todavía no están conectados, marcados con `// TODO EMAIL`.
+2. **Firma electrónica certificada (DocuSeal)** — esa integración quedó
+   pausada en una sesión anterior por limitaciones del plan gratuito de
+   DocuSeal. Por ahora el contrato queda con un hash SHA-256 como evidencia
+   técnica de integridad (válido, pero sin el nivel de certificación legal
+   de un firmante electrónico externo). Cuando quieras retomarlo, hay que
+   decidir entre pagar el plan Pro de DocuSeal u otro proveedor.
+
+Probado localmente de punta a punta contra Postgres real: un prestamista
+no asignado no puede generar el contrato de una operación ajena, un
+prestatario no puede generarlo (rol equivocado), el prestamista asignado sí
+puede, no se duplica si ya existe, el PDF del contrato y el del pagaré se
+generan correctamente (contenido, cláusulas legales, QR de verificación, y
+firmas visibles), la descarga del PDF respeta que solo las partes
+involucradas puedan verlo, y la operación pasa a "Por_Desembolsar".
+
+## ⚠️ Antes de desplegar el módulo 3: correr una migración en Neon
+
+Este módulo necesita una tabla nueva (`documentos_generados`) que no existe
+todavía en tu base de datos. Antes de subir este código a producción:
+
+1. Entra al **SQL Editor** de tu proyecto en Neon (el mismo lugar donde
+   corriste `001_schema.sql` durante la migración).
+2. Abre el archivo `sql/002_documentos_generados.sql` (incluido en esta
+   entrega) y pega todo su contenido en el SQL Editor.
+3. Ejecútalo. Deberías ver `CREATE TABLE` y `CREATE INDEX` sin errores.
+
+Solo hace falta correrlo **una vez**. Si despliegas el código antes de
+correr esta migración, el módulo de contratos fallará (la tabla no
+existirá) — el resto de la app (auth, marketplace) seguirá funcionando
+normal.
+
 ## Cómo correrlo tú (local, antes de desplegar)
 
 1. `npm install`
@@ -106,7 +178,7 @@ Por ahora, para arrancar gratis, es aceptable.
 
 1. ~~Auth (login + re-hasheo)~~ ✅ desplegado en producción
 2. ~~Marketplace + contraofertas (`Marketplace.gs`)~~ ✅ este entregable (falta desplegar)
-3. Generación de contratos (`GeneradorContratos.gs`)
+3. ~~Generación de contratos (`GeneradorContratos.gs`)~~ ✅ este entregable (falta desplegar)
 4. Pagos y cobranzas (`RecepcionPagos.gs`, `ActualizacionCobranzas.gs`)
 5. Registro de usuarios + documentos + IA (`GestionUsuarios.gs`, `DocumentosUsuario.gs`, `AuditoriaIA.gs`)
 6. Admin panel (`AdminPanel.gs`, `AdminPanelRootBackend.gs`)

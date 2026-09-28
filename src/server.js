@@ -5,6 +5,7 @@ const helmet = require("helmet");
 
 const authRoutes = require("./routes/auth.routes");
 const marketplaceRoutes = require("./routes/marketplace.routes");
+const contratoRoutes = require("./routes/contrato.routes");
 
 const app = express();
 
@@ -24,6 +25,7 @@ app.get("/health", (req, res) => {
 
 app.use("/auth", authRoutes);
 app.use("/marketplace", marketplaceRoutes);
+app.use("/contratos", contratoRoutes);
 
 // Manejador de errores de último recurso — nunca debe filtrar detalles
 // internos al cliente.
