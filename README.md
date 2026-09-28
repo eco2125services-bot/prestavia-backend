@@ -183,6 +183,67 @@ correr esta migración, el módulo de contratos fallará (la tabla no
 existirá) — el resto de la app (auth, marketplace) seguirá funcionando
 normal.
 
+## Módulo 5 — Registro de usuarios + documentos + IA
+
+Reemplaza `GestionUsuarios.gs`, `DocumentosUsuario.gs` y `AuditoriaIA.gs`.
+Es el módulo que faltaba para que el ciclo completo funcione de principio
+a fin: alguien se registra → su garantía se evalúa automáticamente → sube
+sus documentos → el prestamista los aprueba → **eso genera el contrato
+solo** (conecta directo con el módulo 3, sin duplicar esa lógica).
+
+**Importante sobre "la IA":** el motor que evalúa el avalúo/riesgo de la
+garantía (`ia.service.js`) es un **motor de reglas fijas** (avalúo = 85%
+del valor declarado, riesgo por LTV), no un modelo de inteligencia
+artificial — así era también en el Apps Script original, el nombre es
+heredado. Donde sí hay un modelo de IA real es en el análisis de las fotos
+de los documentos subidos (Gemini, de Google), y **es completamente
+opcional**: sin configurar `GEMINI_API_KEY`, los documentos simplemente
+quedan marcados "Pendiente_Revision_Manual" — nada se rompe, tu equipo
+revisa a mano. Con la key (gratis en https://aistudio.google.com/app/apikey),
+la IA compara la foto contra los datos declarados y avisa si detecta
+inconsistencias. Te lo aviso desde ya para que decidas si quieres activarla
+ahora o más adelante — no bloquea nada de este módulo.
+
+Registro (rutas **públicas**, no requieren sesión):
+- `POST /registro/prestamista` — crea la cuenta con `estatus_suscripcion = 'Pendiente'` hasta que el admin confirme el pago (Zelle u otro método).
+- `POST /registro/prestatario` — crea la cuenta, el bien en garantía, y la publica en el marketplace, todo en un solo paso. Corre la evaluación de riesgo automáticamente.
+
+Registro (requieren sesión):
+- `POST /registro/solicitud` (rol Prestatario) — nueva solicitud de préstamo para quien ya tiene cuenta. Bloqueada si tiene cuotas en mora sin resolver, o si ya tiene 3 préstamos activos.
+- `POST /registro/cancelar-suscripcion` — solo si no tiene ningún préstamo activo.
+
+Documentos (rol Prestatario):
+- `POST /documentos/identidad` / `POST /documentos/bien` — sube un documento (foto/PDF en base64). Corre el análisis de IA si está configurada.
+- `GET /documentos/mis-documentos` — lista todo lo que ha subido.
+
+Documentos (rol Prestamista):
+- `POST /documentos/aprobar` — `{ idOp, aprobado, bajoResponsabilidad?, notas? }`. Si aprueba, **genera el contrato automáticamente** (llama al mismo servicio del módulo 3). `bajoResponsabilidad: true` dice que aprueba aunque la IA haya marcado inconsistencias — queda constancia en la auditoría.
+- `GET /documentos/aprobacion/:idOp` — estatus de aprobación de una operación.
+
+Descarga de archivos: `GET /documentos/archivo/:idArchivo` — solo el
+prestatario dueño, su prestamista asignado, o un Admin pueden verlo (mismo
+patrón de almacenamiento en Neon que contratos y comprobantes de pago —
+ver migración más abajo).
+
+**Nota técnica sobre la tasa de interés:** la tabla exige que toda
+operación tenga una tasa de interés (no puede quedar vacía), pero en el
+diseño original la tasa la propone el prestamista DESPUÉS, vía
+contraoferta — al momento de publicar la solicitud todavía no se conoce.
+Se resolvió guardando un valor "placeholder" de 0.1% (el mínimo permitido)
+hasta que llega la primera contraoferta real, que lo reemplaza. No afecta
+nada visible para el usuario.
+
+Probado localmente de punta a punta, con el ciclo COMPLETO conectando los
+5 módulos: registro de prestamista y prestatario → evaluación automática
+de riesgo (avalúo, LTV, calificación) → contraoferta del prestamista →
+aceptación del prestatario → subida de documentos (sin Gemini configurada,
+cae correctamente a revisión manual) → aprobación del prestamista →
+generación automática del contrato + pagaré → operación en
+"Por_Desembolsar". También probados: bloqueo de país (EEUU), duplicados de
+email/cédula/RIF, límite de 3 préstamos activos, bloqueo de cancelación de
+suscripción con préstamo activo, y control de acceso a los archivos
+(dueño/prestamista asignado/Admin únicamente).
+
 ## ⚠️ Antes de desplegar el módulo 4: correr OTRA migración en Neon
 
 Mismo patrón: este módulo necesita la tabla `comprobantes_pago` (para
@@ -195,6 +256,20 @@ guardan en `documentos_generados`).
 
 También una sola vez. Si despliegas antes de correrla, solo el módulo de
 pagos/cobranzas fallará — el resto sigue funcionando.
+
+## ⚠️ Antes de desplegar el módulo 5: correr OTRA migración más en Neon
+
+Mismo patrón otra vez: este módulo necesita la tabla `archivos_documentos`
+(para las fotos de cédula y del bien en garantía).
+
+1. Entra al **SQL Editor** de Neon.
+2. Abre `sql/004_archivos_documentos.sql` y pega su contenido.
+3. Ejecútalo.
+
+Si además quieres activar el análisis de fotos con IA (opcional, ver
+arriba), agrega la variable de entorno `GEMINI_API_KEY` en Render junto
+con las demás (`DATABASE_URL`, `JWT_SECRET`, etc.) — si la dejas vacía o no
+la agregas, no pasa nada, los documentos quedan para revisión manual.
 
 ## Cómo correrlo tú (local, antes de desplegar)
 
@@ -238,7 +313,7 @@ Por ahora, para arrancar gratis, es aceptable.
 2. ~~Marketplace + contraofertas (`Marketplace.gs`)~~ ✅ este entregable (falta desplegar)
 3. ~~Generación de contratos (`GeneradorContratos.gs`)~~ ✅ este entregable (falta desplegar)
 4. ~~Pagos y cobranzas (`RecepcionPagos.gs`, `ActualizacionCobranzas.gs`)~~ ✅ este entregable (falta desplegar)
-5. Registro de usuarios + documentos + IA (`GestionUsuarios.gs`, `DocumentosUsuario.gs`, `AuditoriaIA.gs`)
+5. ~~Registro de usuarios + documentos + IA (`GestionUsuarios.gs`, `DocumentosUsuario.gs`, `AuditoriaIA.gs`)~~ ✅ este entregable (falta desplegar)
 6. Admin panel (`AdminPanel.gs`, `AdminPanelRootBackend.gs`)
 7. Cron de mora y vencimientos de suscripción (`CronPlanificadores.gs`) — en
    Render esto se resuelve con un **Cron Job** de Render (no con

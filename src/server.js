@@ -8,6 +8,8 @@ const marketplaceRoutes = require("./routes/marketplace.routes");
 const contratoRoutes = require("./routes/contrato.routes");
 const pagosRoutes = require("./routes/pagos.routes");
 const adminRoutes = require("./routes/admin.routes");
+const registroRoutes = require("./routes/registro.routes");
+const documentosRoutes = require("./routes/documentos.routes");
 
 const app = express();
 
@@ -32,6 +34,8 @@ app.use("/marketplace", marketplaceRoutes);
 app.use("/contratos", contratoRoutes);
 app.use("/pagos", pagosRoutes);
 app.use("/admin", adminRoutes);
+app.use("/registro", registroRoutes);
+app.use("/documentos", documentosRoutes);
 
 // Manejador de errores de último recurso — nunca debe filtrar detalles
 // internos al cliente.

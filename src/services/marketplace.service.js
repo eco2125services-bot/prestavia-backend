@@ -325,19 +325,11 @@ async function solicitarDocumentosPrestatario(idOp, mensajePersonalizado, idPres
  * mostrarlos en "Mis Préstamos" del prestamista.
  */
 async function obtenerDocumentosDeOperacion(idOp) {
-  const { rows } = await pool.query(
-    `SELECT u.link_documentos_id, ag.url_foto_drive
-     FROM oportunidades_mercado om
-     JOIN usuarios u ON u.id_usuario = om.id_solicitante
-     LEFT JOIN activos_garantia ag ON ag.id_activo = om.id_activo_garantia
-     WHERE om.id_oportunidad = $1`,
-    [idOp]
-  );
-  const fila = rows[0];
-  return {
-    linkCedula: fila ? fila.link_documentos_id || "" : "",
-    linkBien: fila ? fila.url_foto_drive || "" : "",
-  };
+  // Implementación real desde el módulo 5 (documentos + IA) — antes de eso
+  // este endpoint era un stub que siempre devolvía links vacíos, porque
+  // todavía no existía ninguna tabla ni flujo de subida de documentos.
+  const { obtenerDocumentosDeOperacion: obtenerDocsReal } = require("./documentos.service");
+  return obtenerDocsReal(idOp);
 }
 
 module.exports = {
