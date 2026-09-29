@@ -299,6 +299,70 @@ préstamos/liberación de garantía/condonación de cuotas, y bloqueado si se
 intenta de nuevo sobre una operación ya `Pagada`). También verificado el
 403 para roles distintos de Admin en todas las rutas nuevas.
 
+## Módulo 7 — Cron de mora y vencimientos de suscripción
+
+Reemplaza `CronPlanificadores.gs` (`evaluarVencimientosSuscripcion`,
+`evaluarCuotasVencidas`). No necesita ninguna tabla nueva.
+
+**Diferencia deliberada frente al original:** en Apps Script, estas dos
+funciones corrían solas gracias a un "trigger" instalable de la propia
+plataforma (`ScriptApp.newTrigger(...).timeBased()...`). Ese mecanismo no
+existe en un backend Node normal, y un `setInterval` dentro del propio
+`server.js` **no sirve**: el plan Free de Render duerme el servicio tras
+~15 min sin tráfico, y cualquier reinicio (deploy, caída) resetea el
+contador — el cron simplemente dejaría de correr sin que nadie se diera
+cuenta. La forma correcta en Render es un **Cron Job**: un servicio
+separado y gratuito que Render enciende solo, a la hora que le digas,
+ejecuta un comando, y apaga — sin depender de que el web service esté
+despierto.
+
+- `src/services/cron.service.js` — la lógica en sí, portada del original:
+  - `evaluarVencimientosSuscripcion()`: revisa los prestamistas con plan
+    activo. Si `fecha_fin_plan` ya pasó, los pasa a `Vencido`. Si vence en
+    exactamente 5 o 2 días, marca un recordatorio (`// TODO EMAIL` — el
+    envío real de correos sigue pendiente de un proveedor, igual que en
+    los módulos anteriores).
+  - `evaluarCuotasVencidas()`: revisa TODAS las cuotas `Pendiente`/`Vencido`
+    de `control_pagos`. Si pasaron su fecha de vencimiento + 3 días de
+    gracia (cláusula CUARTA del contrato) sin pagarse, las marca `Vencido`
+    y calcula días de mora + interés de mora usando la `tasa_mora_diaria`
+    que el PRESTAMISTA fijó para esa operación (no una tasa global de la
+    plataforma — si no la fijó, usa 0.5% diario por defecto). La primera
+    vez que una cuota entra en mora penaliza -10 puntos de reputación al
+    prestatario; en revisiones posteriores del mismo atraso solo
+    recalcula días/interés, sin volver a penalizar ni duplicar avisos.
+  - Ambas funciones son **idempotentes**: correr el cron dos veces el
+    mismo día (o por error) no duplica penalizaciones ni notificaciones.
+- `src/jobs/cron-diario.js` — el script que de verdad ejecuta el Render
+  Cron Job. Corre ambas revisiones, imprime un resumen, y termina el
+  proceso (con código de salida 0 si todo salió bien, 1 si hubo algún
+  error — así Render marca la corrida como fallida en su dashboard).
+  Localmente: `npm run cron`.
+- **Además**, se agregaron dos rutas en `/admin/*` para disparar cada
+  revisión a mano (útil para probar en producción sin esperar al horario
+  programado, o para forzar una corrida): `POST
+  /admin/cron/vencimientos-suscripcion` y `POST /admin/cron/cuotas-vencidas`.
+  El Render Cron Job sigue siendo el que corre automáticamente todos los
+  días — estas rutas son un extra, no un reemplazo.
+
+**Otra diferencia deliberada:** el original tenía DOS triggers a horas
+distintas (~8am suscripciones, ~9am mora). Aquí se combinan en una sola
+corrida diaria del Cron Job — no hay una razón de negocio para separarlos
+en dos horarios, y un solo Cron Job es más simple de mantener (y evita
+tener dos servicios gratuitos separados en Render).
+
+Probado localmente con datos que cubren los 4 escenarios de suscripción
+(vencida hoy, vence en 5 días, vence en 2 días, vigente lejos, y ya
+vencida de antes) y los 4 escenarios de mora (cuota nueva en mora, cuota
+ya en mora que solo debe recalcularse, cuota futura que no debe tocarse,
+y cuota dentro de los 3 días de gracia que tampoco debe tocarse todavía)
+— verificado a mano contra la base de datos después de cada corrida:
+estatus correctos, días de mora e interés calculados correctamente con la
+tasa de mora específica de cada operación, reputación penalizada
+exactamente una vez por cuota (no dos, así se corra el cron varias veces
+el mismo día), y auditoría registrada sin duplicados. También probadas
+las dos rutas manuales de `/admin/cron/*`.
+
 ## ⚠️ Antes de desplegar el módulo 4: correr OTRA migración en Neon
 
 Mismo patrón: este módulo necesita la tabla `comprobantes_pago` (para
@@ -362,6 +426,38 @@ cualquier usuario después de un rato de inactividad — cuando tengas
 usuarios pagando, vale la pena subir al plan pago ($7/mes) que no duerme.
 Por ahora, para arrancar gratis, es aceptable.
 
+## ⚠️ Módulo 7: crear el Render Cron Job (paso aparte, no es el mismo servicio)
+
+El cron de mora y vencimientos de suscripción NO corre dentro del web
+service que ya tienes desplegado — es un servicio nuevo y separado en
+Render, gratis, que solo se enciende una vez al día:
+
+1. En Render: **New +** → **Cron Job** (no "Web Service" — es una opción
+   distinta en el mismo menú).
+2. Conecta el MISMO repositorio de GitHub (`prestavia-backend`).
+3. Configuración:
+   - **Build Command:** `npm install`
+   - **Command:** `npm run cron` (o directamente `node src/jobs/cron-diario.js`)
+   - **Schedule:** una expresión cron, por ejemplo `0 12 * * *` para que
+     corra todos los días a las 12:00 UTC (8:00am hora de Rep. Dominicana
+     /Panamá, que no tienen horario de verano). Ajusta la hora si prefieres
+     otra.
+   - **Plan:** Free.
+4. En la pestaña **Environment** de ESTE Cron Job, agrega las mismas
+   variables que el web service: `DATABASE_URL`, `JWT_SECRET`,
+   `JWT_EXPIRES_IN`, `BCRYPT_ROUNDS` (el cron usa el mismo `.env.example`
+   — no necesita ninguna variable nueva). Render no comparte
+   automáticamente las variables entre dos servicios distintos, aunque
+   estén en el mismo repo — hay que agregarlas de nuevo aquí.
+5. Guarda. Puedes darle a "Trigger Run" manualmente desde el dashboard de
+   Render para probar que corre bien la primera vez, sin esperar al
+   horario programado.
+
+Cada corrida queda registrada en los logs de ese Cron Job (en el
+dashboard de Render) con el resumen que imprime `cron-diario.js` — así
+puedes confirmar cuántos vencimientos/moras procesó cada día sin tener
+que consultar la base de datos a mano.
+
 ## Próximos módulos (en este orden, por prioridad de riesgo)
 
 1. ~~Auth (login + re-hasheo)~~ ✅ desplegado en producción
@@ -369,7 +465,12 @@ Por ahora, para arrancar gratis, es aceptable.
 3. ~~Generación de contratos (`GeneradorContratos.gs`)~~ ✅ desplegado en producción
 4. ~~Pagos y cobranzas (`RecepcionPagos.gs`, `ActualizacionCobranzas.gs`)~~ ✅ desplegado en producción
 5. ~~Registro de usuarios + documentos + IA (`GestionUsuarios.gs`, `DocumentosUsuario.gs`, `AuditoriaIA.gs`)~~ ✅ desplegado en producción
-6. ~~Admin panel (`AdminPanel.gs`, `AdminPanelRootBackend.gs`)~~ ✅ este entregable (falta desplegar)
-7. Cron de mora y vencimientos de suscripción (`CronPlanificadores.gs`) — en
-   Render esto se resuelve con un **Cron Job** de Render (no con
-   `setInterval` dentro del web service, que se duerme).
+6. ~~Admin panel (`AdminPanel.gs`, `AdminPanelRootBackend.gs`)~~ ✅ desplegado en producción
+7. ~~Cron de mora y vencimientos de suscripción (`CronPlanificadores.gs`)~~ ✅ este entregable (falta desplegar — recuerda que este va como un **Render Cron Job aparte**, no dentro del web service, ver sección de arriba)
+
+Con esto quedan los 7 módulos identificados originalmente ya construidos.
+Lo que sigue después de desplegar este último es trabajo de "acabado":
+conectar un proveedor de correo real (reemplazar los `// TODO EMAIL` que
+quedaron regados en varios módulos), decidir sobre DocuSeal para firma
+electrónica certificada (pausado desde el módulo 3), y activar
+`GEMINI_API_KEY` si todavía no lo has hecho (módulo 5, opcional).

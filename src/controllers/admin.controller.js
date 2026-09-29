@@ -1,5 +1,6 @@
 const cobranzasService = require("../services/cobranzas.service");
 const adminPanelService = require("../services/admin-panel.service");
+const cronService = require("../services/cron.service");
 
 async function getComisionesPendientes(req, res) {
   try {
@@ -205,6 +206,32 @@ async function getPerfil(req, res) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Módulo 7 — disparo manual del cron diario (además del Render Cron Job
+// automático — útil para probar o forzar una corrida sin esperar al
+// horario programado).
+// ---------------------------------------------------------------------
+
+async function postCronVencimientosSuscripcion(req, res) {
+  try {
+    const resumen = await cronService.evaluarVencimientosSuscripcion();
+    return res.status(200).json({ exito: true, mensaje: "Revisión de vencimientos de suscripción ejecutada.", datos: resumen });
+  } catch (error) {
+    console.error("Error en POST /admin/cron/vencimientos-suscripcion:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function postCronCuotasVencidas(req, res) {
+  try {
+    const resumen = await cronService.evaluarCuotasVencidas();
+    return res.status(200).json({ exito: true, mensaje: "Revisión de cuotas en mora ejecutada.", datos: resumen });
+  } catch (error) {
+    console.error("Error en POST /admin/cron/cuotas-vencidas:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
 module.exports = {
   getComisionesPendientes,
   postAprobarComision,
@@ -225,4 +252,6 @@ module.exports = {
   getContratosMaster,
   getBovedaContratos,
   getPerfil,
+  postCronVencimientosSuscripcion,
+  postCronCuotasVencidas,
 };

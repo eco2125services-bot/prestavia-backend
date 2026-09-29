@@ -37,4 +37,10 @@ router.get("/contratos/boveda", controller.getBovedaContratos);
 
 router.get("/perfil", controller.getPerfil);
 
+// --- Módulo 7: disparo manual del cron diario (opcional, el Render Cron
+// Job ya lo corre solo — esto es para pruebas o forzar una corrida) -----
+
+router.post("/cron/vencimientos-suscripcion", controller.postCronVencimientosSuscripcion);
+router.post("/cron/cuotas-vencidas", controller.postCronCuotasVencidas);
+
 module.exports = router;
