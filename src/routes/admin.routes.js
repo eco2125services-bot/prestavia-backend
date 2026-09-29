@@ -15,4 +15,26 @@ router.post("/prestamos/:idOp/autorizar-desembolso", controller.postAutorizarDes
 router.get("/pagos/pendientes", controller.getPagosPendientes);
 router.post("/pagos/:idTransaccion/validar", controller.postValidarPago);
 
+// --- Módulo 6: panel de administrador -------------------------------
+
+router.get("/usuarios", controller.getUsuarios);
+router.patch("/usuarios/:idUsuario", controller.patchUsuario);
+
+router.get("/prestamistas/pendientes-activacion", controller.getPrestamistasPendientesActivacion);
+router.post("/prestamistas/:idUsuario/activar-suscripcion", controller.postActivarSuscripcion);
+
+router.get("/ingresos", controller.getIngresos);
+router.get("/indicadores", controller.getIndicadores);
+router.get("/dashboard/metricas", controller.getDashboardMetricas);
+router.get("/dashboard/tareas-pendientes", controller.getTareasPendientes);
+
+router.get("/oportunidades", controller.getOportunidadesMaster);
+router.get("/prestamos/por-desembolsar", controller.getPorDesembolsar);
+router.post("/prestamos/:idOp/cerrar-manual", controller.postCerrarManual);
+
+router.get("/contratos", controller.getContratosMaster);
+router.get("/contratos/boveda", controller.getBovedaContratos);
+
+router.get("/perfil", controller.getPerfil);
+
 module.exports = router;

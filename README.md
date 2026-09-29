@@ -244,6 +244,61 @@ email/cédula/RIF, límite de 3 préstamos activos, bloqueo de cancelación de
 suscripción con préstamo activo, y control de acceso a los archivos
 (dueño/prestamista asignado/Admin únicamente).
 
+## Módulo 6 — Panel de administrador
+
+Reemplaza `AdminPanel.gs` y `AdminPanelRootBackend.gs`. Todo bajo el
+namespace `/admin/*` que ya existía desde el módulo 4 (protegido con
+`requiereAutenticacion` + `requiereRol("Admin")` a nivel de router — nadie
+que no sea Admin puede tocar ninguna de estas rutas).
+
+**No necesita ninguna tabla nueva** — a diferencia de los módulos 3, 4 y 5,
+este solo lee/agrega datos que ya existen en las tablas de los módulos
+anteriores. No hay migración que correr en Neon para este módulo.
+
+Gestión de usuarios:
+- `GET /admin/usuarios?rol=Prestamista` — listado maestro, `rol` es opcional (Prestamista/Prestatario/Admin).
+- `PATCH /admin/usuarios/:idUsuario` — `{ nombre?, email?, telefono?, direccion? }`. A propósito NO permite tocar la contraseña ni el rol desde aquí (eso sigue siendo un `UPDATE` SQL directo, ver módulo 4) — un typo en un formulario no debe poder convertir a alguien en Admin.
+- `GET /admin/prestamistas/pendientes-activacion` — prestamistas que ya se registraron y están esperando que el admin confirme su pago de suscripción (Zelle u otro método manual).
+- `POST /admin/prestamistas/:idUsuario/activar-suscripcion` — `{ plan: "mensual" | "anual" }`. Activa la cuenta y calcula `fecha_fin_plan` (+30 o +365 días).
+
+Ingresos e indicadores:
+- `GET /admin/ingresos` — comisiones de plataforma ya aprobadas + suscripciones de prestamistas activas (a $20/mes o $200/año, igual que el original).
+- `GET /admin/indicadores` — préstamos por estatus, garantías por estatus, totales generales.
+- `GET /admin/dashboard/metricas` — total de préstamos, monto total financiado, solicitudes pendientes (para la tarjeta principal del dashboard).
+- `GET /admin/dashboard/tareas-pendientes` — el widget de "cosas por hacer": prestamistas pendientes de activación, comisiones pendientes, cuotas pendientes de validar, desembolsos listos, y garantías todavía sin evaluación de IA (`contarActivosPendientesEvaluacion` del original, reimplementado como una consulta).
+
+Operaciones (préstamos):
+- `GET /admin/oportunidades` — vista maestra (mismas llaves que esperaba el frontend original: `ID_Op`, `Prestatario`, `Monto_Solicitado`, `Estatus`).
+- `GET /admin/prestamos/por-desembolsar` — operaciones con contrato ya generado, con el estatus de su comisión (para saber cuáles están realmente listas para `POST /admin/prestamos/:idOp/autorizar-desembolso`, del módulo 4).
+- `POST /admin/prestamos/:idOp/cerrar-manual` — `{ motivo }`. Cierre manual de un préstamo en `En_Cobro` (fallback para cuando el pago se recibió fuera de la plataforma, o hay un acuerdo especial con el prestatario). Aplica los MISMOS efectos que el cierre automático del módulo 4: marca `Pagada`, bonifica reputación y contador de préstamos exitosos de ambas partes, libera la garantía, y condona cualquier cuota que hubiera quedado pendiente o vencida.
+
+Contratos:
+- `GET /admin/contratos` — vista maestra (mismas llaves del original: `ID_Contrato`, `ID_Op`, `Fecha_Firma_Digital`, `Estatus_Legal`, `Link_PDF_Generado`).
+- `GET /admin/contratos/boveda` — "bóveda" de contratos: cada contrato firmado con los datos de ambas partes y los links de descarga (contrato + pagaré), que apuntan a `GET /contratos/documento/:idDocumento` del módulo 3 (que ya valida acceso de Admin).
+
+Perfil propio: `GET /admin/perfil`.
+
+**Funciones del original que NO se portaron** (no aplican a esta
+arquitectura Postgres/Node, a diferencia de Sheets + Drive):
+- `crearUsuarioAdminInicial()` — en Sheets era un setup manual de una sola vez; aquí un Admin se promueve con un `UPDATE` SQL directo (ver módulo 4).
+- `fijarEncabezadosOportunidadesMercado()` — utilidad de encabezados de columna de Sheets, no existe ese concepto en una tabla de Postgres.
+- `forzarAutorizacionCompletaDrive()` / `diagnosticarGeneracionContrato()` — diagnóstico de permisos de Google Drive; nuestros contratos nunca tocan Drive (BYTEA en Neon, módulo 3).
+- `generarContratoManualTemporal()` — función de debug/prueba del original, no una operación real del panel.
+
+Probado localmente con datos que cubren los 5 módulos anteriores a la vez
+(prestamistas activos/pendientes en plan mensual y anual, préstamos en
+cada estatus, comisiones aprobadas/pendientes, cuotas pagadas/vencidas,
+contratos generados, garantías en distintos estados): listado y filtro de
+usuarios, edición de datos de contacto, activación de suscripción (con
+recálculo correcto de ingresos después), los 3 endpoints de
+indicadores/métricas/tareas-pendientes con los números verificados a mano
+contra la base, vista maestra y bóveda de contratos, y el ciclo completo
+de cierre manual (bloqueado en estatus incorrecto, exitoso en `En_Cobro`
+con verificación directa en la base de datos de reputación/contador de
+préstamos/liberación de garantía/condonación de cuotas, y bloqueado si se
+intenta de nuevo sobre una operación ya `Pagada`). También verificado el
+403 para roles distintos de Admin en todas las rutas nuevas.
+
 ## ⚠️ Antes de desplegar el módulo 4: correr OTRA migración en Neon
 
 Mismo patrón: este módulo necesita la tabla `comprobantes_pago` (para
@@ -310,11 +365,11 @@ Por ahora, para arrancar gratis, es aceptable.
 ## Próximos módulos (en este orden, por prioridad de riesgo)
 
 1. ~~Auth (login + re-hasheo)~~ ✅ desplegado en producción
-2. ~~Marketplace + contraofertas (`Marketplace.gs`)~~ ✅ este entregable (falta desplegar)
-3. ~~Generación de contratos (`GeneradorContratos.gs`)~~ ✅ este entregable (falta desplegar)
-4. ~~Pagos y cobranzas (`RecepcionPagos.gs`, `ActualizacionCobranzas.gs`)~~ ✅ este entregable (falta desplegar)
-5. ~~Registro de usuarios + documentos + IA (`GestionUsuarios.gs`, `DocumentosUsuario.gs`, `AuditoriaIA.gs`)~~ ✅ este entregable (falta desplegar)
-6. Admin panel (`AdminPanel.gs`, `AdminPanelRootBackend.gs`)
+2. ~~Marketplace + contraofertas (`Marketplace.gs`)~~ ✅ desplegado en producción
+3. ~~Generación de contratos (`GeneradorContratos.gs`)~~ ✅ desplegado en producción
+4. ~~Pagos y cobranzas (`RecepcionPagos.gs`, `ActualizacionCobranzas.gs`)~~ ✅ desplegado en producción
+5. ~~Registro de usuarios + documentos + IA (`GestionUsuarios.gs`, `DocumentosUsuario.gs`, `AuditoriaIA.gs`)~~ ✅ desplegado en producción
+6. ~~Admin panel (`AdminPanel.gs`, `AdminPanelRootBackend.gs`)~~ ✅ este entregable (falta desplegar)
 7. Cron de mora y vencimientos de suscripción (`CronPlanificadores.gs`) — en
    Render esto se resuelve con un **Cron Job** de Render (no con
    `setInterval` dentro del web service, que se duerme).

@@ -1,4 +1,5 @@
 const cobranzasService = require("../services/cobranzas.service");
+const adminPanelService = require("../services/admin-panel.service");
 
 async function getComisionesPendientes(req, res) {
   try {
@@ -59,4 +60,169 @@ async function postValidarPago(req, res) {
   }
 }
 
-module.exports = { getComisionesPendientes, postAprobarComision, postAutorizarDesembolso, getPagosPendientes, postValidarPago };
+// ---------------------------------------------------------------------
+// Módulo 6 — Panel de administrador
+// ---------------------------------------------------------------------
+
+async function getUsuarios(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerUsuariosAdmin(req.query.rol);
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/usuarios:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function patchUsuario(req, res) {
+  try {
+    const resultado = await adminPanelService.actualizarDatosUsuarioAdmin(req.params.idUsuario, req.body || {}, req.usuario.idUsuario);
+    return res.status(resultado.exito ? 200 : 400).json(resultado);
+  } catch (error) {
+    console.error("Error en PATCH /admin/usuarios/:idUsuario:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getPrestamistasPendientesActivacion(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerPrestamistasPendientesActivacionAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/prestamistas/pendientes-activacion:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function postActivarSuscripcion(req, res) {
+  try {
+    const resultado = await adminPanelService.activarSuscripcionAdmin(req.params.idUsuario, req.body ? req.body.plan : null, req.usuario.idUsuario);
+    return res.status(resultado.exito ? 200 : 400).json(resultado);
+  } catch (error) {
+    console.error("Error en POST /admin/prestamistas/:idUsuario/activar-suscripcion:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getIngresos(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerIngresosPlataformaAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/ingresos:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getIndicadores(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerIndicadoresGestionAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/indicadores:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getDashboardMetricas(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerMetricasDashboardAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/dashboard/metricas:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getTareasPendientes(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerTareasPendientesAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/dashboard/tareas-pendientes:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getOportunidadesMaster(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerOportunidadesMasterParaAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/oportunidades:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getPorDesembolsar(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerOperacionesPorDesembolsarAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/prestamos/por-desembolsar:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function postCerrarManual(req, res) {
+  try {
+    const resultado = await adminPanelService.cerrarOperacionManualAdmin(req.params.idOp, req.body ? req.body.motivo : null, req.usuario.idUsuario);
+    return res.status(resultado.exito ? 200 : 400).json(resultado);
+  } catch (error) {
+    console.error("Error en POST /admin/prestamos/:idOp/cerrar-manual:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getContratosMaster(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerContratosMasterParaAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/contratos:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getBovedaContratos(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerBovedaContratosAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/contratos/boveda:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getPerfil(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerPerfilPropioAdmin(req.usuario.idUsuario);
+    if (!datos) return res.status(404).json({ exito: false, mensaje: "Perfil no encontrado." });
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/perfil:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+module.exports = {
+  getComisionesPendientes,
+  postAprobarComision,
+  postAutorizarDesembolso,
+  getPagosPendientes,
+  postValidarPago,
+  getUsuarios,
+  patchUsuario,
+  getPrestamistasPendientesActivacion,
+  postActivarSuscripcion,
+  getIngresos,
+  getIndicadores,
+  getDashboardMetricas,
+  getTareasPendientes,
+  getOportunidadesMaster,
+  getPorDesembolsar,
+  postCerrarManual,
+  getContratosMaster,
+  getBovedaContratos,
+  getPerfil,
+};
