@@ -30,6 +30,26 @@ async function postActualizarClave(req, res) {
   }
 }
 
+// Revalida la sesión (la app lo llama al cargar): requiereAutenticacion ya
+// comprobó firma, usuario y vigencia; aquí se devuelven los datos ACTUALES.
+async function getSesion(req, res) {
+  res.set("Cache-Control", "no-store");
+  const u = req.usuario.datos;
+  return res.status(200).json({
+    exito: true,
+    usuario: { idUsuario: u.id_usuario, nombreLegal: u.nombre_legal, email: u.email, rol: u.rol, estatusSuscripcion: u.estatus_suscripcion },
+  });
+}
+
+async function postLogout(req, res) {
+  try {
+    return res.status(200).json(await authService.cerrarSesion(req.usuario.idUsuario, req.ip));
+  } catch (error) {
+    console.error("Error en /auth/logout:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
 // "¿Olvidaste tu contraseña?" — responde siempre lo mismo exista o no la cuenta.
 async function postOlvideClave(req, res) {
   try {
@@ -96,4 +116,4 @@ async function postRestablecer(req, res) {
   }
 }
 
-module.exports = { postLogin, postActualizarClave, postOlvideClave, getRestablecer, postRestablecer };
+module.exports = { getSesion, postLogout, postLogin, postActualizarClave, postOlvideClave, getRestablecer, postRestablecer };
