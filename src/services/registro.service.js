@@ -52,12 +52,14 @@ function generarId(prefijo) {
 // con la política de contraseña del cliente (letras+símbolo+dígitos), pero
 // con ~8 caracteres realmente aleatorios en vez de 6.
 function generarClaveTemporal() {
-  const alfabeto = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  // Sin caracteres que se confunden al leerlos y teclearlos a mano
+  // (0/O, 1/l/I) — antes una clave bien copiada fallaba por eso.
+  const alfabeto = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let cuerpo = "";
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 10; i++) {
     cuerpo += alfabeto[crypto.randomInt(alfabeto.length)];
   }
-  const digitos = String(crypto.randomInt(10, 100));
+  const digitos = String(crypto.randomInt(2, 10)) + String(crypto.randomInt(2, 10));
   return "Pv" + cuerpo + "!" + digitos;
 }
 
@@ -80,6 +82,29 @@ async function verificarDuplicados(client, { email, cedula, rif }) {
     [emailN, cedulaN, rifN]
   );
   return rows.length > 0;
+}
+
+/**
+ * Igual que verificarDuplicados, pero distingue si colisionó el CORREO o
+ * alguno de los otros datos (cédula / RIF). Solo se usa para decidir qué
+ * correo mandar al dueño del email — nunca se devuelve al navegador.
+ */
+async function detalleDuplicados(client, { email, cedula, rif }) {
+  const emailN = (email || "").toString().trim().toLowerCase();
+  const cedulaN = (cedula || "").toString().trim().toLowerCase();
+  const rifN = (rif || "").toString().trim().toLowerCase();
+
+  const { rows } = await client.query(
+    `SELECT
+       EXISTS (SELECT 1 FROM usuarios WHERE lower(email) = $1) AS email,
+       EXISTS (
+         SELECT 1 FROM usuarios
+          WHERE ($2 <> '' AND lower(cedula_pasaporte) = $2)
+             OR ($3 <> '' AND lower(rif) = $3)
+       ) AS otros`,
+    [emailN, cedulaN, rifN]
+  );
+  return { email: rows[0].email, otros: rows[0].otros };
 }
 
 /**
@@ -333,13 +358,26 @@ function escapeHtml(s) {
  * enlace — ver sql/008_verificacion_email.sql para el porqué.
  */
 async function crearRegistroPendiente({ email, rol, datos }) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || "").toString().trim())) {
+    return { exito: false, mensaje: "Escribe un correo electrónico válido." };
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    if (await verificarDuplicados(client, datos)) {
+    // Informe de seguridad (MEDIO, enumeración / recomendación #5): antes, al
+    // reutilizar un correo, cédula o RIF ya registrado, la respuesta decía
+    // "Ya existe una cuenta..." y cualquiera podía confirmar quién está en la
+    // plataforma. Ahora la respuesta HTTP es idéntica en ambos casos; lo que
+    // pasó de verdad solo se le cuenta al DUEÑO de ese correo, por correo.
+    const dup = await detalleDuplicados(client, datos);
+    if (dup.email || dup.otros) {
       await client.query("ROLLBACK");
-      return { exito: false, mensaje: "Ya existe una cuenta registrada con ese correo, cédula o RIF." };
+      const aviso = dup.email
+        ? `<p>Hola,</p><p>Alguien (quizá tú) intentó crear una cuenta en PrestaVía con este correo, pero <strong>ya tienes una cuenta</strong>. Si fuiste tú, inicia sesión en <a href="${FRONTEND_PUBLIC_URL}">${FRONTEND_PUBLIC_URL}</a>. Si no fuiste tú, ignora este mensaje: tu cuenta no cambió.</p>`
+        : `<p>Hola,</p><p>No pudimos completar tu registro en PrestaVía con los datos enviados. Revisa que sean correctos o escríbenos si crees que es un error.</p>`;
+      await enviarCorreo({ to: email, subject: "Sobre tu registro en PrestaVía", html: aviso });
+      return respuestaRegistroEnviado(email);
     }
 
     const token = crypto.randomBytes(32).toString("hex");
@@ -371,16 +409,21 @@ async function crearRegistroPendiente({ email, rol, datos }) {
       return { exito: false, mensaje: "No pudimos enviar el correo de confirmación. Intenta de nuevo en unos minutos." };
     }
 
-    return {
-      exito: true,
-      mensaje: `Te enviamos un correo a ${email} para confirmar tu cuenta. Ábrelo y haz clic en el enlace — ahí verás tu contraseña temporal.`,
-    };
+    return respuestaRegistroEnviado(email);
   } catch (error) {
     await client.query("ROLLBACK");
     return { exito: false, mensaje: "Error al registrar: " + error.message };
   } finally {
     client.release();
   }
+}
+
+/** Misma respuesta tanto si el registro es nuevo como si el correo/cédula/RIF ya existían (anti-enumeración). */
+function respuestaRegistroEnviado(email) {
+  return {
+    exito: true,
+    mensaje: `Revisa tu correo (${email}): te enviamos las instrucciones para continuar. Si no lo ves en unos minutos, mira en la carpeta de spam.`,
+  };
 }
 
 /**
