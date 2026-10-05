@@ -15,7 +15,27 @@ const loginLimiter = rateLimit({
   message: { exito: false, mensaje: "Demasiados intentos. Intenta de nuevo en unos minutos." },
 });
 
+// Recuperación de contraseña: pedir el enlace (5 por IP cada 15 min — cada
+// pedido puede mandar un correo) y abrir/usar el enlace.
+const olvideLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { exito: false, mensaje: "Demasiados intentos. Intenta de nuevo en unos minutos." },
+});
+const restablecerLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Demasiados intentos. Intenta de nuevo en unos minutos.",
+});
+
 router.post("/login", loginLimiter, authController.postLogin);
+router.post("/olvide-clave", olvideLimiter, authController.postOlvideClave);
+router.get("/restablecer", restablecerLimiter, authController.getRestablecer);
+router.post("/restablecer", restablecerLimiter, authController.postRestablecer);
 // HALLAZGO DE SEGURIDAD (ALTO) corregido: esta ruta aceptaba {email,
 // nuevaClave} SIN ningún token — cualquiera que conociera el correo de un
 // usuario podía cambiarle la contraseña y tomar su cuenta. Ahora exige el

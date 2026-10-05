@@ -33,6 +33,9 @@ router.post("/prestatario", registroLimiter, controller.postRegistrarPrestatario
 // token es de 256 bits — fuerza bruta es inviable — pero un límite
 // generoso no cuesta nada.
 router.get("/verificar-email", registroLimiter, controller.getVerificarEmail);
+// El GET solo muestra un botón; el POST es el que crea la cuenta (un escáner
+// de enlaces de correo hace GET, nunca POST).
+router.post("/verificar-email", registroLimiter, controller.postVerificarEmail);
 
 // Estas sí requieren estar logueado (son acciones de un usuario existente).
 router.post("/solicitud", requiereAutenticacion, requiereRol("Prestatario"), controller.postNuevaSolicitud);
