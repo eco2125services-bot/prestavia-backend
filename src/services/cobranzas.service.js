@@ -16,6 +16,63 @@ const { pool } = require("../db");
 const { registrarAuditoria } = require("./audit.service");
 const { calcularAmortizacion } = require("./amortizacion.service");
 const { actualizarReputacionUsuario, incrementarPrestamosExitosos } = require("./reputacion.service");
+const { generarPdfFiniquito } = require("./pdf.service");
+const { calcularHashFirma } = require("./contrato.service");
+
+function formatearFechaFiniquito(fecha) {
+  const pad = (n) => n.toString().padStart(2, "0");
+  return `${pad(fecha.getDate())}/${pad(fecha.getMonth() + 1)}/${fecha.getFullYear()} ${pad(fecha.getHours())}:${pad(fecha.getMinutes())}`;
+}
+
+/**
+ * Genera el PDF de finiquito cuando un préstamo se termina de pagar — se
+ * ejecuta DENTRO de la misma transacción que cierra la operación (ver más
+ * abajo), para que nunca quede un préstamo 'Pagada' sin su finiquito.
+ */
+async function generarFiniquitoOperacion(client, idOportunidad, idAdmin) {
+  const { rows } = await client.query(
+    `SELECT om.id_oportunidad, om.id_solicitante, om.id_prestamista_asignado, om.monto_solicitado,
+            ab.tipo_bien, ab.marca_modelo,
+            up.nombre_legal AS nombre_prestatario, up.cedula_pasaporte AS cedula_prestatario,
+            ul.nombre_legal AS nombre_prestamista
+     FROM oportunidades_mercado om
+     JOIN usuarios up ON up.id_usuario = om.id_solicitante
+     JOIN usuarios ul ON ul.id_usuario = om.id_prestamista_asignado
+     LEFT JOIN activos_garantia ab ON ab.id_activo = om.id_activo_garantia
+     WHERE om.id_oportunidad = $1`,
+    [idOportunidad]
+  );
+  const op = rows[0];
+  if (!op) return; // no debería pasar, pero nunca bloquear el cierre del préstamo por esto
+
+  const fechaPagoFinal = new Date();
+  const hashFiniquito = calcularHashFirma(idOportunidad, op.id_prestamista_asignado, "Finiquito", fechaPagoFinal.getTime());
+
+  const pdfBuffer = await generarPdfFiniquito({
+    idOp: idOportunidad,
+    nombrePrestatario: op.nombre_prestatario,
+    cedulaPrestatario: op.cedula_prestatario,
+    nombrePrestamista: op.nombre_prestamista,
+    montoSolicitado: op.monto_solicitado,
+    tipoBien: op.tipo_bien,
+    marcaModelo: op.marca_modelo,
+    fechaPagoFinal: formatearFechaFiniquito(fechaPagoFinal),
+    hashFiniquito,
+  });
+
+  const idDocFiniquito = "DOC-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+  await client.query(
+    `INSERT INTO documentos_generados (id_documento, id_oportunidad, tipo_documento, nombre_archivo, contenido_pdf)
+     VALUES ($1, $2, 'Finiquito', $3, $4)`,
+    [idDocFiniquito, idOportunidad, `Finiquito_${idOportunidad}.pdf`, pdfBuffer]
+  );
+
+  const urlFiniquito = `/contratos/documento/${idDocFiniquito}`;
+  await client.query("UPDATE contratos_firmados SET url_finiquito = $1 WHERE id_oportunidad = $2", [urlFiniquito, idOportunidad]);
+
+  await registrarAuditoria(client, idAdmin, "Finiquito_Generado", "Cobranzas", { idOportunidad });
+  // TODO EMAIL: avisar a ambas partes que el préstamo quedó saldado y su finiquito está listo.
+}
 
 function generarId(prefijo) {
   return prefijo + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -294,6 +351,7 @@ async function concluirValidacionTransaccion(idRegistro, aprobado, motivoRechazo
             op.id_activo_garantia,
           ]);
         }
+        await generarFiniquitoOperacion(client, idOportunidad, idAdmin);
         // TODO EMAIL: notificar a las 3 partes (prestatario, prestamista, admin) que el préstamo se cerró y la garantía quedó liberada.
       }
     }

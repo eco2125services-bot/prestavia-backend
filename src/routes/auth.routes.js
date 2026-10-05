@@ -1,6 +1,7 @@
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const authController = require("../controllers/auth.controller");
+const { requiereAutenticacion } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -15,6 +16,11 @@ const loginLimiter = rateLimit({
 });
 
 router.post("/login", loginLimiter, authController.postLogin);
-router.post("/actualizar-clave", authController.postActualizarClave);
+// HALLAZGO DE SEGURIDAD (ALTO) corregido: esta ruta aceptaba {email,
+// nuevaClave} SIN ningún token — cualquiera que conociera el correo de un
+// usuario podía cambiarle la contraseña y tomar su cuenta. Ahora exige el
+// JWT de sesión (emitido por /auth/login, incluso cuando requiereCambioClave
+// es true) y el usuario a modificar sale SIEMPRE del token, nunca del body.
+router.post("/actualizar-clave", requiereAutenticacion, authController.postActualizarClave);
 
 module.exports = router;

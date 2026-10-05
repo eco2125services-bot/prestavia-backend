@@ -4,7 +4,7 @@ async function postGenerar(req, res) {
   try {
     const { idOp, firma } = req.body;
     if (!idOp) return res.status(400).json({ exito: false, mensaje: "Falta idOp." });
-    const resultado = await contratoService.generarContratoDigital(idOp, req.usuario.idUsuario, firma);
+    const resultado = await contratoService.generarContratoDigital(idOp, req.usuario.idUsuario, firma, req.ip);
     return res.status(resultado.exito ? 200 : 400).json(resultado);
   } catch (error) {
     console.error("Error en POST /contratos/generar:", error);

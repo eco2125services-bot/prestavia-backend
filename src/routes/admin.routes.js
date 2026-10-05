@@ -20,6 +20,9 @@ router.post("/pagos/:idTransaccion/validar", controller.postValidarPago);
 router.get("/usuarios", controller.getUsuarios);
 router.patch("/usuarios/:idUsuario", controller.patchUsuario);
 
+router.get("/reportes/prestamistas", controller.getReportePrestamistas);
+router.get("/reportes/prestatarios", controller.getReportePrestatarios);
+
 router.get("/prestamistas/pendientes-activacion", controller.getPrestamistasPendientesActivacion);
 router.post("/prestamistas/:idUsuario/activar-suscripcion", controller.postActivarSuscripcion);
 

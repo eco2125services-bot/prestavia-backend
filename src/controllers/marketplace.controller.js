@@ -50,7 +50,14 @@ async function postResponder(req, res) {
     if (!idOp || typeof aceptada !== "boolean") {
       return res.status(400).json({ exito: false, mensaje: "Faltan datos (idOp, aceptada)." });
     }
-    const resultado = await marketplaceService.responderPropuesta(idOp, req.usuario.idUsuario, aceptada, firma);
+    const resultado = await marketplaceService.responderPropuesta(
+      idOp,
+      req.usuario.idUsuario,
+      aceptada,
+      firma,
+      req.ip,
+      req.headers["user-agent"]
+    );
     return res.status(resultado.exito ? 200 : 400).json(resultado);
   } catch (error) {
     console.error("Error en POST /marketplace/responder:", error);

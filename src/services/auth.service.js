@@ -28,6 +28,7 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { pool } = require("../db");
+const { registrarAuditoria } = require("./audit.service");
 
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || "10", 10);
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -41,7 +42,12 @@ function esHashBcrypt(valor) {
   return typeof valor === "string" && /^\$2[aby]?\$/.test(valor);
 }
 
-async function login(email, claveIngresada) {
+// Antes el login no quedaba registrado en ningún lado (ni éxito ni
+// fallo) — sin esto, un ataque de fuerza bruta contra una cuenta puntual
+// (el rate-limit por IP de auth.routes.js no frena a quien rota de IP) era
+// invisible. `ip` es opcional y nunca cambia el resultado del login, solo
+// qué queda anotado.
+async function login(email, claveIngresada, ip) {
   const emailNormalizado = (email || "").toString().trim().toLowerCase();
   if (!emailNormalizado || !claveIngresada) {
     return { exito: false, mensaje: "Email y contraseña son requeridos." };
@@ -54,6 +60,7 @@ async function login(email, claveIngresada) {
   const usuario = rows[0];
   if (!usuario) {
     // Mensaje genérico a propósito: no revelar si el email existe o no.
+    await registrarAuditoria(null, null, "Login_Fallido", "Auth", { email: emailNormalizado, motivo: "email_no_existe" }, ip);
     return { exito: false, mensaje: "Credenciales inválidas." };
   }
 
@@ -75,6 +82,7 @@ async function login(email, claveIngresada) {
   }
 
   if (!credencialesValidas) {
+    await registrarAuditoria(null, usuario.id_usuario, "Login_Fallido", "Auth", { email: emailNormalizado, motivo: "clave_incorrecta" }, ip);
     return { exito: false, mensaje: "Credenciales inválidas." };
   }
 
@@ -83,6 +91,8 @@ async function login(email, claveIngresada) {
     JWT_SECRET,
     { expiresIn: JWT_EXPIRES_IN }
   );
+
+  await registrarAuditoria(null, usuario.id_usuario, "Login_Exitoso", "Auth", { email: emailNormalizado }, ip);
 
   return {
     exito: true,
@@ -98,23 +108,39 @@ async function login(email, claveIngresada) {
   };
 }
 
-async function actualizarContrasenaObligatoria(email, nuevaClave) {
-  const emailNormalizado = (email || "").toString().trim().toLowerCase();
-  if (!emailNormalizado || !nuevaClave || nuevaClave.length < 6) {
-    return { exito: false, mensaje: "Datos inválidos (la clave debe tener mínimo 6 caracteres)." };
-  }
+// Antes recibía un `email` de body sin ninguna verificación de identidad —
+// cualquiera que lo conociera podía cambiarle la clave a otro usuario
+// (hallazgo de seguridad ALTO). Ahora SIEMPRE recibe el idUsuario que salió
+// del JWT validado por requiereAutenticacion — ya no hay look-up por email
+// aquí, así que no hay forma de apuntar a una cuenta que no sea la propia.
+// Política de contraseña reforzada (hallazgo BAJO del informe de
+// seguridad: antes solo pedía 6 caracteres, sin complejidad, y solo en el
+// servidor — el cliente podía mandar cualquier cosa). No se sube a 10+
+// para no romper la experiencia de un prototipo con usuarios de prueba ya
+// creados, pero sí exige mínimo 8 caracteres con al menos una letra y un
+// número.
+function claveCumplePolitica(clave) {
+  return typeof clave === "string" && clave.length >= 8 && /[a-zA-Z]/.test(clave) && /[0-9]/.test(clave);
+}
 
-  const { rows } = await pool.query("SELECT id_usuario FROM usuarios WHERE lower(email) = $1", [emailNormalizado]);
-  const usuario = rows[0];
-  if (!usuario) {
-    return { exito: false, mensaje: "Usuario no encontrado." };
+async function actualizarContrasenaObligatoria(idUsuario, nuevaClave, ip) {
+  if (!idUsuario || !claveCumplePolitica(nuevaClave)) {
+    return {
+      exito: false,
+      mensaje: "La contraseña debe tener mínimo 8 caracteres, con al menos una letra y un número.",
+    };
   }
 
   const nuevoHash = await bcrypt.hash(nuevaClave, BCRYPT_ROUNDS);
-  await pool.query(
-    "UPDATE usuarios SET contrasena_hash = $1, requiere_cambio_clave = false WHERE id_usuario = $2",
-    [nuevoHash, usuario.id_usuario]
+  const { rows } = await pool.query(
+    "UPDATE usuarios SET contrasena_hash = $1, requiere_cambio_clave = false WHERE id_usuario = $2 RETURNING id_usuario",
+    [nuevoHash, idUsuario]
   );
+  if (!rows[0]) {
+    return { exito: false, mensaje: "Usuario no encontrado." };
+  }
+
+  await registrarAuditoria(null, idUsuario, "Contrasena_Actualizada", "Auth", {}, ip);
 
   return { exito: true, mensaje: "Contraseña actualizada correctamente." };
 }

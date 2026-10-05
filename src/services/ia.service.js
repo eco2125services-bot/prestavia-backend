@@ -132,10 +132,14 @@ async function analizarDocumentoConIA(buffer, mimeType, tipoDocumento, datosEspe
     if (tipoDocumento === "cedula") {
       promptTexto =
         "Eres un analista de verificación de identidad para una plataforma de préstamos. " +
-        `Analiza esta imagen de un documento de identidad. El usuario declaró llamarse '${datosEsperados.nombreEsperado}' ` +
-        `y tener el número de documento '${datosEsperados.numeroEsperado}'. ` +
+        `Analiza esta imagen de un documento de identidad. El usuario declaró llamarse '${datosEsperados.nombreEsperado}', ` +
+        `tener el número de documento '${datosEsperados.numeroEsperado}', y residir en '${datosEsperados.paisEsperado || "no especificado"}'. ` +
+        "Identifica el país que emite el documento (por el escudo, la bandera, el nombre de la institución emisora, o el formato del documento — " +
+        "por ejemplo una cédula dominicana dice 'REPÚBLICA DOMINICANA — JUNTA CENTRAL ELECTORAL' y una panameña dice 'REPÚBLICA DE PANAMÁ — TRIBUNAL ELECTORAL'). " +
         'Responde ÚNICAMENTE con un JSON (sin texto adicional, sin markdown) con este formato exacto: ' +
         '{"esDocumentoValido": true/false, "coincideNombre": true/false, "coincideNumero": true/false, ' +
+        '"paisDelDocumento": "República Dominicana" | "Panamá" | "Otro" | "No se pudo determinar", ' +
+        '"coincidePais": true/false, ' +
         '"señalesDeEdicion": true/false, "explicacion": "breve explicación en español"}';
     } else {
       promptTexto =
@@ -167,13 +171,16 @@ async function analizarDocumentoConIA(buffer, mimeType, tipoDocumento, datosEspe
       analisis["señalesDeEdicion"] === true ||
       analisis.coincideNombre === false ||
       analisis.coincideNumero === false ||
-      analisis.correspondeTipoBien === false;
+      analisis.correspondeTipoBien === false ||
+      analisis.coincidePais === false;
 
     return {
       estatus: sospechoso ? "Revision_Manual_IA" : "Validado_IA",
       detalle: JSON.stringify(analisis),
       mensajeUsuario: sospechoso
-        ? "⚠️ La IA detectó inconsistencias — el prestamista será advertido antes de aprobar."
+        ? (analisis.coincidePais === false
+            ? "⚠️ El país del documento no coincide con el país declarado — un administrador revisará esto antes de continuar."
+            : "⚠️ La IA detectó inconsistencias — el prestamista será advertido antes de aprobar.")
         : "La IA validó el documento sin inconsistencias.",
     };
   } catch (error) {
@@ -181,4 +188,4 @@ async function analizarDocumentoConIA(buffer, mimeType, tipoDocumento, datosEspe
   }
 }
 
-module.exports = { evaluarActivoIndividual, verificarIdentidadIndividual, analizarDocumentoConIA };
+module.exports = { evaluarActivoIndividual, verificarIdentidadIndividual, analizarDocumentoConIA, LTV_MAXIMO_ACEPTABLE };

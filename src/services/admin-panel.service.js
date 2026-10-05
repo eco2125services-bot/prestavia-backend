@@ -130,6 +130,95 @@ async function activarSuscripcionAdmin(idUsuario, plan, idAdmin) {
 }
 
 // ---------------------------------------------------------------------
+// Reportes: suscripciones de prestamistas (tipo, vencimiento) y pagos
+// realizados / préstamos terminados por usuario. Pedido explícitamente
+// porque hoy el admin ve los pagos que ENTRAN por validar, pero no tenía
+// ninguna vista de lo que YA se validó ni de las suscripciones por vencer.
+//
+// Cada columna es una subconsulta independiente (en vez de JOIN + GROUP
+// BY) a propósito: un JOIN entre control_pagos/pagos_comision/
+// oportunidades_mercado multiplicaría las filas de un usuario con varias
+// cuotas Y varios préstamos (mismo tipo de bug que ya corregimos antes en
+// obtenerMisPrestamosPrestamista).
+// ---------------------------------------------------------------------
+
+/**
+ * Prestamistas: su suscripción (tipo, estatus, fecha de vencimiento),
+ * comisiones que ya pagaron, y préstamos que ya cerraron pagados.
+ */
+async function obtenerReportePrestamistasAdmin() {
+  const { rows } = await pool.query(
+    `SELECT u.id_usuario, u.nombre_legal, u.email,
+            u.plan_suscripcion, u.estatus_suscripcion, u.fecha_fin_plan,
+            u.puntos_reputacion, u.prestamos_exitosos,
+            (SELECT COUNT(*) FROM pagos_comision pc WHERE pc.id_prestamista_pagador = u.id_usuario AND pc.estatus_revision = 'Aprobado') AS comisiones_pagadas,
+            (SELECT COALESCE(SUM(pc.monto_pagado), 0) FROM pagos_comision pc WHERE pc.id_prestamista_pagador = u.id_usuario AND pc.estatus_revision = 'Aprobado') AS total_comisiones_pagadas,
+            (SELECT COUNT(*) FROM oportunidades_mercado om WHERE om.id_prestamista_asignado = u.id_usuario AND om.estatus = 'Pagada') AS prestamos_terminados
+     FROM usuarios u
+     WHERE u.rol = 'Prestamista'
+     ORDER BY u.fecha_fin_plan ASC NULLS LAST`
+  );
+
+  const hoy = new Date();
+  return rows.map((r) => {
+    const fechaFin = r.fecha_fin_plan ? new Date(r.fecha_fin_plan) : null;
+    const diasParaVencer = fechaFin ? Math.ceil((fechaFin - hoy) / 86400000) : null;
+    let estatusRenovacion = "Sin_Suscripcion";
+    if (r.estatus_suscripcion === "Activo") {
+      if (diasParaVencer === null) estatusRenovacion = "Activa";
+      else if (diasParaVencer < 0) estatusRenovacion = "Vencida";
+      else if (diasParaVencer <= 7) estatusRenovacion = "Por_Vencer";
+      else estatusRenovacion = "Activa";
+    } else {
+      estatusRenovacion = r.estatus_suscripcion || "Pendiente";
+    }
+    return {
+      idUsuario: r.id_usuario,
+      nombre: r.nombre_legal,
+      email: r.email,
+      planSuscripcion: r.plan_suscripcion,
+      estatusSuscripcion: r.estatus_suscripcion,
+      fechaFinPlan: r.fecha_fin_plan,
+      diasParaVencer,
+      estatusRenovacion,
+      puntosReputacion: r.puntos_reputacion,
+      prestamosExitosos: r.prestamos_exitosos,
+      comisionesPagadas: parseInt(r.comisiones_pagadas, 10) || 0,
+      totalComisionesPagadas: parseFloat(r.total_comisiones_pagadas) || 0,
+      prestamosTerminados: parseInt(r.prestamos_terminados, 10) || 0,
+    };
+  });
+}
+
+/**
+ * Prestatarios: cuotas pagadas (validadas) y préstamos que ya terminaron
+ * de pagar por completo.
+ */
+async function obtenerReportePrestatariosAdmin() {
+  const { rows } = await pool.query(
+    `SELECT u.id_usuario, u.nombre_legal, u.email, u.puntos_reputacion, u.prestamos_exitosos,
+            (SELECT COUNT(*) FROM control_pagos cp WHERE cp.id_prestatario = u.id_usuario AND cp.estatus_pago = 'Pagado') AS cuotas_pagadas,
+            (SELECT COALESCE(SUM(cp.monto_recibido_confirmado), 0) FROM control_pagos cp WHERE cp.id_prestatario = u.id_usuario AND cp.estatus_pago = 'Pagado') AS total_pagado,
+            (SELECT COUNT(*) FROM oportunidades_mercado om WHERE om.id_solicitante = u.id_usuario AND om.estatus = 'Pagada') AS prestamos_terminados,
+            (SELECT COUNT(*) FROM control_pagos cp WHERE cp.id_prestatario = u.id_usuario AND cp.estatus_pago = 'Vencido') AS cuotas_en_mora
+     FROM usuarios u
+     WHERE u.rol = 'Prestatario'
+     ORDER BY total_pagado DESC`
+  );
+  return rows.map((r) => ({
+    idUsuario: r.id_usuario,
+    nombre: r.nombre_legal,
+    email: r.email,
+    puntosReputacion: r.puntos_reputacion,
+    prestamosExitosos: r.prestamos_exitosos,
+    cuotasPagadas: parseInt(r.cuotas_pagadas, 10) || 0,
+    totalPagado: parseFloat(r.total_pagado) || 0,
+    prestamosTerminados: parseInt(r.prestamos_terminados, 10) || 0,
+    cuotasEnMora: parseInt(r.cuotas_en_mora, 10) || 0,
+  }));
+}
+
+// ---------------------------------------------------------------------
 // Ingresos e indicadores
 // ---------------------------------------------------------------------
 
@@ -425,4 +514,6 @@ module.exports = {
   obtenerBovedaContratosAdmin,
   obtenerPerfilPropioAdmin,
   obtenerTareasPendientesAdmin,
+  obtenerReportePrestamistasAdmin,
+  obtenerReportePrestatariosAdmin,
 };

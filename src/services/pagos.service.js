@@ -92,11 +92,40 @@ async function guardarReportePago(idPrestatarioAutenticado, datos) {
       return { exito: false, mensaje: "Esta cuota no te pertenece." };
     }
 
-    const urlComprobante = await guardarComprobanteBase64(client, {
+    // No se acepta reportar más de lo que realmente se debe en esta
+    // operación (suma de todas las cuotas pendientes/vencidas) — antes esto
+    // se aceptaba sin tope y el excedente se aplicaba como abono
+    // adelantado; ahora, si el monto es mayor a la deuda total, se rechaza
+    // y se le informa al prestatario el saldo exacto para que pague esa
+    // cantidad (o menos, como abono parcial normal).
+    const { rows: rowsSaldo } = await client.query(
+      `SELECT COALESCE(SUM(monto_cuota), 0) AS saldo
+       FROM control_pagos WHERE id_oportunidad = $1 AND estatus_pago IN ('Pendiente', 'Vencido')`,
+      [cuota.id_oportunidad]
+    );
+    const saldoTotalPendiente = parseFloat(rowsSaldo[0].saldo) || 0;
+    const montoPagado = parseFloat(datos.montoPagado) || 0;
+    if (montoPagado > saldoTotalPendiente + 0.01) {
+      await client.query("ROLLBACK");
+      return {
+        exito: false,
+        mensaje:
+          `El monto reportado ($${montoPagado.toFixed(2)}) es mayor a lo que debes en este préstamo. ` +
+          `Tu saldo total pendiente es $${saldoTotalPendiente.toFixed(2)} — reporta esa cantidad exacta (o menos) para saldar tu deuda.`,
+        saldoTotalPendiente,
+      };
+    }
+
+    const resultadoComprobante = await guardarComprobanteBase64(client, {
       archivoBase64: datos.archivoBase64,
       archivoMimeType: datos.archivoMimeType,
       archivoNombre: datos.archivoNombre,
     });
+    if (resultadoComprobante && resultadoComprobante.error) {
+      await client.query("ROLLBACK");
+      return { exito: false, mensaje: resultadoComprobante.error };
+    }
+    const urlComprobante = resultadoComprobante;
 
     const idTransaccion = generarId("TX");
     await client.query(
@@ -155,11 +184,16 @@ async function reportarPagoComisionPrestamista(idPrestamistaAutenticado, datos) 
       return { exito: false, mensaje: "Esta operación no está asignada a tu cuenta." };
     }
 
-    const urlComprobante = await guardarComprobanteBase64(client, {
+    const resultadoComprobante = await guardarComprobanteBase64(client, {
       archivoBase64: datos.archivoBase64,
       archivoMimeType: datos.archivoMimeType,
       archivoNombre: datos.archivoNombre,
     });
+    if (resultadoComprobante && resultadoComprobante.error) {
+      await client.query("ROLLBACK");
+      return { exito: false, mensaje: resultadoComprobante.error };
+    }
+    const urlComprobante = resultadoComprobante;
 
     const idComision = generarId("FEE");
     await client.query(

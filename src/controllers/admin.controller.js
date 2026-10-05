@@ -75,6 +75,26 @@ async function getUsuarios(req, res) {
   }
 }
 
+async function getReportePrestamistas(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerReportePrestamistasAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/reportes/prestamistas:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
+async function getReportePrestatarios(req, res) {
+  try {
+    const datos = await adminPanelService.obtenerReportePrestatariosAdmin();
+    return res.status(200).json({ exito: true, datos });
+  } catch (error) {
+    console.error("Error en GET /admin/reportes/prestatarios:", error);
+    return res.status(500).json({ exito: false, mensaje: "Error interno del servidor." });
+  }
+}
+
 async function patchUsuario(req, res) {
   try {
     const resultado = await adminPanelService.actualizarDatosUsuarioAdmin(req.params.idUsuario, req.body || {}, req.usuario.idUsuario);
@@ -239,6 +259,8 @@ module.exports = {
   getPagosPendientes,
   postValidarPago,
   getUsuarios,
+  getReportePrestamistas,
+  getReportePrestatarios,
   patchUsuario,
   getPrestamistasPendientesActivacion,
   postActivarSuscripcion,

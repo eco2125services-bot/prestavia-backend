@@ -6,20 +6,31 @@
  * esta base de datos en vez de depender de una cuenta de Drive.
  */
 const { pool } = require("../db");
+const { validarArchivo } = require("./validacionArchivo.service");
 
 function generarId() {
   return "ARCH-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
+// Hallazgo de seguridad: ver validacionArchivo.service.js. Esta función
+// podía lanzar una excepción genérica antes (buffer inválido, etc.); ahora
+// devuelve { error: "mensaje" } cuando el archivo no pasa la validación,
+// para que quien la llama pueda devolverle al usuario un mensaje claro en
+// vez de un 500 genérico.
 async function guardarArchivoBase64(client, { archivoBase64, archivoMimeType, archivoNombre }) {
+  const buffer = Buffer.from(archivoBase64 || "", "base64");
+  const validacion = validarArchivo(buffer, archivoMimeType);
+  if (!validacion.ok) {
+    return { error: validacion.mensaje };
+  }
+
   const ejecutor = client || pool;
   const idArchivo = generarId();
-  const buffer = Buffer.from(archivoBase64, "base64");
   await ejecutor.query(
     "INSERT INTO archivos_documentos (id_archivo, contenido, mime_type, nombre_archivo) VALUES ($1, $2, $3, $4)",
-    [idArchivo, buffer, archivoMimeType || "application/octet-stream", archivoNombre || idArchivo]
+    [idArchivo, buffer, validacion.mimeTypeReal, archivoNombre || idArchivo]
   );
-  return { idArchivo, ruta: `/documentos/archivo/${idArchivo}`, buffer, mimeType: archivoMimeType || "application/octet-stream" };
+  return { idArchivo, ruta: `/documentos/archivo/${idArchivo}`, buffer, mimeType: validacion.mimeTypeReal };
 }
 
 async function obtenerArchivoPorId(idArchivo) {

@@ -60,8 +60,13 @@ function generarId(prefijo) {
   return prefijo + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-function calcularHashFirma(idOp, idUsuario, nombreFirma, timestamp) {
-  const cadena = `${idOp}|${idUsuario}|${nombreFirma}|${timestamp}`;
+// `ip` es opcional a propósito: la del prestamista (aceptación implícita de
+// su propia oferta) no siempre está disponible en el punto donde se llama
+// esta función. Cuando sí la hay (la del prestatario, leída de
+// aceptaciones_prestatario), queda atada al hash — no solo guardada al
+// lado — así que no se puede alterar sin invalidar la firma.
+function calcularHashFirma(idOp, idUsuario, nombreFirma, timestamp, ip) {
+  const cadena = `${idOp}|${idUsuario}|${nombreFirma}|${timestamp}|${ip || ""}`;
   return crypto.createHash("sha256").update(cadena).digest("hex");
 }
 
@@ -80,7 +85,7 @@ function formatearFecha(fecha) {
  * asignado a esa operación (verificación de dueño — el original de Apps
  * Script no distinguía quién llamaba a la función).
  */
-async function generarContratoDigital(idOp, idPrestamistaAutenticado, firmaPrestatarioOpcional) {
+async function generarContratoDigital(idOp, idPrestamistaAutenticado, firmaPrestatarioOpcional, ipPrestamista) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -138,15 +143,30 @@ async function generarContratoDigital(idOp, idPrestamistaAutenticado, firmaPrest
       bien = rowsBien[0] || {};
     }
 
+    // Hallazgo de seguridad (BAJO) corregido: antes, si no llegaba
+    // firmaPrestatarioOpcional explícito (y nunca llegaba — nada lo manda),
+    // el hash se calculaba con el NOMBRE LEGAL REGISTRADO, no con lo que el
+    // prestatario realmente tecleó al aceptar la oferta en
+    // responderPropuesta() (marketplace.service.js) — ese texto se perdía.
+    // Ahora se lee el registro de consentimiento real guardado en ese
+    // momento (texto + IP + user-agent), y el hash queda atado a esa IP.
+    const { rows: rowsAceptacion } = await client.query(
+      "SELECT firma_texto, ip_aceptacion, user_agent, fecha_aceptacion FROM aceptaciones_prestatario WHERE id_oportunidad = $1",
+      [idOp]
+    );
+    const aceptacion = rowsAceptacion[0] || null;
+
     const nombrePrestatario = prestatario.nombre_legal || "N/D";
     const nombrePrestamista = prestamista.nombre_legal || "N/D";
-    const firmaPrestatario = firmaPrestatarioOpcional || nombrePrestatario;
+    const firmaPrestatario = firmaPrestatarioOpcional || (aceptacion && aceptacion.firma_texto) || nombrePrestatario;
     const firmaPrestamista = nombrePrestamista; // aceptación implícita: fue su oferta la que se aceptó.
+    const ipPrestatario = aceptacion ? aceptacion.ip_aceptacion : null;
+    const userAgentPrestatario = aceptacion ? aceptacion.user_agent : null;
 
     const fechaFirma = new Date();
     const timestampFirma = fechaFirma.getTime();
-    const hashPrestatario = calcularHashFirma(idOp, op.id_solicitante, firmaPrestatario, timestampFirma);
-    const hashPrestamista = calcularHashFirma(idOp, op.id_prestamista_asignado, firmaPrestamista, timestampFirma);
+    const hashPrestatario = calcularHashFirma(idOp, op.id_solicitante, firmaPrestatario, timestampFirma, ipPrestatario);
+    const hashPrestamista = calcularHashFirma(idOp, op.id_prestamista_asignado, firmaPrestamista, timestampFirma, ipPrestamista);
 
     const idContrato = generarId("CTR");
     const idDocContrato = generarId("DOC");
@@ -201,8 +221,9 @@ async function generarContratoDigital(idOp, idPrestamistaAutenticado, firmaPrest
     await client.query(
       `INSERT INTO contratos_firmados
          (id_contrato, id_oportunidad, id_prestatario, id_prestamista, fecha_firma, hash_firma_digital,
-          url_documento_pdf, estatus_contrato, clausula_prenda, lien_ucc_registro)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'Vigente', $8, $9)`,
+          url_documento_pdf, estatus_contrato, clausula_prenda, lien_ucc_registro,
+          ip_prestatario, ip_prestamista, user_agent_prestatario)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'Vigente', $8, $9, $10, $11, $12)`,
       [
         idContrato,
         idOp,
@@ -213,6 +234,9 @@ async function generarContratoDigital(idOp, idPrestamistaAutenticado, firmaPrest
         urlContrato,
         "Prenda sin desplazamiento sobre el bien declarado en la solicitud.",
         urlPagare,
+        ipPrestatario,
+        ipPrestamista || null,
+        userAgentPrestatario,
       ]
     );
 
@@ -220,7 +244,7 @@ async function generarContratoDigital(idOp, idPrestamistaAutenticado, firmaPrest
       idOp,
     ]);
 
-    await registrarAuditoria(client, op.id_solicitante, "Contrato_Generado", "GeneradorContratos", { idOp, hash: hashPrestatario });
+    await registrarAuditoria(client, op.id_solicitante, "Contrato_Generado", "GeneradorContratos", { idOp, hash: hashPrestatario }, ipPrestamista);
 
     await client.query("COMMIT");
 

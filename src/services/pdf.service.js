@@ -216,4 +216,49 @@ async function generarPdfPagare(datos) {
   });
 }
 
-module.exports = { generarPdfContrato, generarPdfPagare };
+/**
+ * Finiquito: constancia de que el préstamo se pagó por completo y la
+ * garantía queda liberada — se genera automáticamente cuando la última
+ * cuota pendiente se valida (ver cobranzas.service.js), visible para
+ * ambas partes desde su dashboard.
+ */
+async function generarPdfFiniquito(datos) {
+  const { idOp, nombrePrestatario, cedulaPrestatario, nombrePrestamista, montoSolicitado, tipoBien, marcaModelo, fechaPagoFinal, hashFiniquito } =
+    datos;
+
+  return crearPdfEnBuffer(async (doc) => {
+    doc.fontSize(18).fillColor(COLOR_TITULO).text("FINIQUITO DE PRÉSTAMO", { align: "center" });
+    doc.fontSize(10).fillColor("#000000").text(`Operación: ${idOp}`, { align: "center" });
+    doc.moveDown(1.5);
+
+    parrafo(
+      doc,
+      `Por medio del presente documento se hace constar que el préstamo correspondiente a la operación ${idOp}, por un monto original ` +
+        `de $${montoSolicitado} (dólares de los Estados Unidos de América), otorgado por ${nombrePrestamista} ("EL PRESTAMISTA") a favor de ` +
+        `${nombrePrestatario}, titular de la cédula de identidad / pasaporte N.º ${cedulaPrestatario || "N/D"} ("EL PRESTATARIO"), ha sido ` +
+        `PAGADO EN SU TOTALIDAD a la fecha ${fechaPagoFinal}.`
+    );
+    parrafo(
+      doc,
+      "En consecuencia, EL PRESTAMISTA declara no tener ningún reclamo pendiente contra EL PRESTATARIO en relación con esta operación, y " +
+        (tipoBien
+          ? `libera formalmente la prenda/garantía constituida sobre el bien declarado (${tipoBien}${marcaModelo ? " — " + marcaModelo : ""}), quedando este libre de todo gravamen registrado en la plataforma PrestaVía.`
+          : "se da por cerrada la operación sin garantías pendientes de liberar.")
+    );
+    parrafo(
+      doc,
+      "Este documento se emite automáticamente por la plataforma PrestaVía al validarse el pago de la última cuota pendiente de esta " +
+        "operación, y sirve como constancia de cierre entre las partes."
+    );
+
+    doc.moveDown(2);
+    doc.fontSize(10).text("_________________________", { align: "center" });
+    doc.font("Helvetica-Bold").text(nombrePrestamista, { align: "center" });
+    doc.font("Helvetica").fontSize(9).text("PRESTAMISTA — préstamo saldado", { align: "center" });
+
+    doc.moveDown(1);
+    doc.fontSize(8).fillColor("#888888").text(`Hash de verificación: ${hashFiniquito}`, { align: "center" });
+  });
+}
+
+module.exports = { generarPdfContrato, generarPdfPagare, generarPdfFiniquito };

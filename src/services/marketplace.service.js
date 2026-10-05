@@ -55,7 +55,8 @@ async function obtenerOportunidadesMercado(idPrestamista) {
 
   const { rows } = await pool.query(
     `SELECT om.id_oportunidad, om.id_solicitante, om.monto_solicitado, om.plazo_meses,
-            om.tasa_interes_anual, om.tipo_garantia, om.estatus, u.pais_residencia
+            om.tasa_interes_anual, om.tipo_garantia, om.estatus, u.pais_residencia,
+            u.puntos_reputacion, u.prestamos_exitosos
      FROM oportunidades_mercado om
      JOIN usuarios u ON u.id_usuario = om.id_solicitante
      WHERE om.estatus = 'Abierta'
@@ -72,6 +73,11 @@ async function obtenerOportunidadesMercado(idPrestamista) {
     interesAnual: parseFloat(fila.tasa_interes_anual) || 0,
     tipoGarantia: fila.tipo_garantia,
     paisSolicitante: fila.pais_residencia,
+    // Puntaje de credibilidad del solicitante (sube con pagos a tiempo y
+    // préstamos terminados, baja con mora) — antes se calculaba pero solo
+    // lo veía el Admin; ahora el prestamista lo ve ANTES de ofertar.
+    puntosReputacion: fila.puntos_reputacion === null ? 0 : parseInt(fila.puntos_reputacion, 10),
+    prestamosExitosos: fila.prestamos_exitosos === null ? 0 : parseInt(fila.prestamos_exitosos, 10),
   }));
 }
 
@@ -83,19 +89,27 @@ async function obtenerOportunidadesMercado(idPrestamista) {
 async function obtenerPrestamosSolicitados(idUsuario) {
   if (!idUsuario) return [];
 
+  // Mismo cuidado que en obtenerMisPrestamosPrestamista: LATERAL + LIMIT 1
+  // para que varios contratos de la misma operación no dupliquen la fila.
   const { rows } = await pool.query(
     `SELECT om.id_oportunidad, om.monto_solicitado, om.plazo_meses, om.tasa_interes_anual,
             om.cuota_estimada_mensual, om.estatus,
-            cf.url_documento_pdf,
-            COALESCE(saldo.saldo_pendiente, 0) AS saldo_pendiente
+            cf.url_documento_pdf, cf.url_finiquito,
+            COALESCE(saldo.saldo_pendiente, 0) AS saldo_pendiente,
+            sd.mensaje AS solicitud_docs_mensaje, sd.fecha_solicitud AS solicitud_docs_fecha
      FROM oportunidades_mercado om
-     LEFT JOIN contratos_firmados cf ON cf.id_oportunidad = om.id_oportunidad
+     LEFT JOIN LATERAL (
+       SELECT url_documento_pdf, url_finiquito FROM contratos_firmados
+       WHERE id_oportunidad = om.id_oportunidad
+       ORDER BY fecha_firma DESC LIMIT 1
+     ) cf ON true
      LEFT JOIN (
        SELECT id_oportunidad, SUM(monto_cuota) AS saldo_pendiente
        FROM control_pagos
        WHERE estatus_pago IN ('Pendiente', 'Vencido')
        GROUP BY id_oportunidad
      ) saldo ON saldo.id_oportunidad = om.id_oportunidad
+     LEFT JOIN solicitudes_documentos sd ON sd.id_oportunidad = om.id_oportunidad AND sd.atendida = false
      WHERE om.id_solicitante = $1
      ORDER BY om.fecha_solicitud DESC`,
     [idUsuario]
@@ -116,6 +130,8 @@ async function obtenerPrestamosSolicitados(idUsuario) {
     estatusOperacion: fila.estatus,
     linkPdf: fila.url_documento_pdf || "",
     linkPDF: fila.url_documento_pdf || "",
+    linkFiniquito: fila.url_finiquito || "",
+    solicitudDocumentos: fila.solicitud_docs_mensaje ? { mensaje: fila.solicitud_docs_mensaje, fecha: fila.solicitud_docs_fecha } : null,
   }));
 }
 
@@ -126,11 +142,20 @@ async function obtenerPrestamosSolicitados(idUsuario) {
 async function obtenerMisPrestamosPrestamista(idPrestamista) {
   if (!idPrestamista) return [];
 
+  // LEFT JOIN LATERAL con LIMIT 1 (en vez de un JOIN directo) a propósito:
+  // puede haber más de un contrato generado para la misma operación (ej. de
+  // pruebas repetidas), y un JOIN directo multiplicaría la fila de la
+  // operación una vez por cada contrato encontrado — el prestamista vería
+  // la misma operación duplicada varias veces en su lista.
   const { rows } = await pool.query(
     `SELECT om.id_oportunidad, om.nombre_prestatario, om.monto_solicitado, om.plazo_meses,
-            om.tasa_interes_anual, om.cuota_estimada_mensual, om.estatus, cf.url_documento_pdf
+            om.tasa_interes_anual, om.cuota_estimada_mensual, om.estatus, cf.url_documento_pdf, cf.url_finiquito
      FROM oportunidades_mercado om
-     LEFT JOIN contratos_firmados cf ON cf.id_oportunidad = om.id_oportunidad
+     LEFT JOIN LATERAL (
+       SELECT url_documento_pdf, url_finiquito FROM contratos_firmados
+       WHERE id_oportunidad = om.id_oportunidad
+       ORDER BY fecha_firma DESC LIMIT 1
+     ) cf ON true
      WHERE om.id_prestamista_asignado = $1
      ORDER BY om.fecha_solicitud DESC`,
     [idPrestamista]
@@ -145,6 +170,7 @@ async function obtenerMisPrestamosPrestamista(idPrestamista) {
     cuotaMensual: fila.cuota_estimada_mensual !== null ? parseFloat(fila.cuota_estimada_mensual) : "--",
     estatus: fila.estatus,
     linkPdf: fila.url_documento_pdf || "",
+    linkFiniquito: fila.url_finiquito || "",
   }));
 }
 
@@ -220,7 +246,7 @@ async function enviarContraoferta(idOp, nuevaTasa, idPrestamista, tasaMoraDiaria
  * viene del JWT — se verifica que sea el dueño real de la oportunidad
  * (esto NO se validaba en la versión de Apps Script).
  */
-async function responderPropuesta(idOp, idPrestatarioAutenticado, aceptada, firma) {
+async function responderPropuesta(idOp, idPrestatarioAutenticado, aceptada, firma, ipAceptacion, userAgent) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -274,7 +300,21 @@ async function responderPropuesta(idOp, idPrestatarioAutenticado, aceptada, firm
       [feePlataforma, montoNeto, calculo.totalPagar, calculo.cuotaMensual, idOp]
     );
 
-    await registrarAuditoria(client, idPrestatarioAutenticado, "Prestamo_Aceptado", "Marketplace", { idOp, firma });
+    // Hallazgo de seguridad (BAJO) corregido: antes la firma tecleada solo
+    // quedaba en el JSONB del audit_log, sin IP ni user-agent, y ni
+    // siquiera era lo que contrato.service.js usaba para el hash de firma
+    // (usaba el nombre legal registrado). Ahora queda en su propia tabla,
+    // con la evidencia que acompaña a un consentimiento real, y
+    // contrato.service.js la lee de aquí al generar el contrato.
+    await client.query(
+      `INSERT INTO aceptaciones_prestatario (id_oportunidad, firma_texto, ip_aceptacion, user_agent)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id_oportunidad) DO UPDATE SET firma_texto = EXCLUDED.firma_texto,
+         ip_aceptacion = EXCLUDED.ip_aceptacion, user_agent = EXCLUDED.user_agent, fecha_aceptacion = now()`,
+      [idOp, firma, ipAceptacion || null, userAgent || null]
+    );
+
+    await registrarAuditoria(client, idPrestatarioAutenticado, "Prestamo_Aceptado", "Marketplace", { idOp, firma }, ipAceptacion);
 
     await client.query("COMMIT");
 
@@ -310,6 +350,18 @@ async function solicitarDocumentosPrestatario(idOp, mensajePersonalizado, idPres
     return { exito: false, mensaje: "Esta operación no está asignada a ti." };
   }
 
+  // Antes esto SOLO quedaba en el log de auditoría — invisible para el
+  // prestatario. Ahora se guarda en una tabla propia para mostrarse en su
+  // dashboard, con el mensaje exacto y la operación exacta (importante
+  // cuando tiene varias solicitudes activas con distintos prestamistas a
+  // la vez, para que sepa quién le pide qué).
+  await pool.query(
+    `INSERT INTO solicitudes_documentos (id_oportunidad, mensaje, fecha_solicitud, atendida)
+     VALUES ($1, $2, now(), false)
+     ON CONFLICT (id_oportunidad) DO UPDATE SET mensaje = EXCLUDED.mensaje, fecha_solicitud = now(), atendida = false`,
+    [idOp, mensajePersonalizado || "Por favor sube tu cédula/pasaporte y fotos del bien en garantía."]
+  );
+
   await registrarAuditoria(null, op.id_solicitante, "Documentos_Solicitados", "Marketplace", {
     idOp,
     mensaje: mensajePersonalizado || "",
@@ -317,7 +369,7 @@ async function solicitarDocumentosPrestatario(idOp, mensajePersonalizado, idPres
 
   // TODO EMAIL: enviar el correo de solicitud de documentos al prestatario.
 
-  return { exito: true, mensaje: "Solicitud registrada. (Nota: el envío de correo todavía no está configurado en este backend.)" };
+  return { exito: true, mensaje: "Solicitud registrada — el prestatario la verá en su dashboard, en esta operación." };
 }
 
 /**
