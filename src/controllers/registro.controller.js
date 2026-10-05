@@ -68,10 +68,10 @@ async function getVerificarEmail(req, res) {
     if (!resultado.exito) {
       return res.status(400).send(paginaHtml({ titulo: "No se pudo confirmar", ok: false, mensaje: `<p>${resultado.mensaje}</p>` }));
     }
+    // detalleSolicitud lo arma el servidor (id + cifras de LTV, sin texto del
+    // usuario) y dice la verdad: publicada o rechazada por riesgo (E3).
     const extra =
-      resultado.rol === "Prestatario" && resultado.idOportunidad
-        ? `<p>Tu solicitud <strong>${resultado.idOportunidad}</strong> ya está publicada en el marketplace.</p>`
-        : "";
+      resultado.rol === "Prestatario" && resultado.detalleSolicitud ? `<p>${resultado.detalleSolicitud}</p>` : "";
     return res.status(200).send(
       paginaHtml({
         titulo: "¡Cuenta confirmada!",
