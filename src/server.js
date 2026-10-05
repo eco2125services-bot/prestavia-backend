@@ -49,6 +49,9 @@ app.use(
 // base64 dentro del cuerpo JSON — una foto de 15MB de una cédula/pasaporte
 // con buena cámara, codificada en base64, pesa ~20MB. 25mb da margen.
 app.use(express.json({ limit: "25mb" }));
+// Para los formularios HTML de los enlaces de correo (confirmar cuenta,
+// restablecer contraseña): solo mandan un token, así que el límite es mínimo.
+app.use(express.urlencoded({ extended: false, limit: "10kb" }));
 
 app.get("/health", (req, res) => {
   res.status(200).json({ ok: true, servicio: "prestavia-backend" });
