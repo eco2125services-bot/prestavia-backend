@@ -18,6 +18,7 @@ const { pool } = require("../db");
 const { registrarAuditoria } = require("./audit.service");
 const { evaluarActivoIndividual, verificarIdentidadIndividual, LTV_MAXIMO_ACEPTABLE } = require("./ia.service");
 const { enviarCorreo, correoConfigurado } = require("./email.service");
+const { generarClaveTemporal, fijarCaducidadClaveTemporal } = require("./claves.service");
 
 // Hallazgo de seguridad (MEDIO) corregido: no había verificación de
 // correo — cualquiera podía registrar la cuenta de OTRA persona con su
@@ -42,25 +43,6 @@ const MAX_PRESTAMOS_ACTIVOS = 3;
 
 function generarId(prefijo) {
   return prefijo + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
-}
-
-// Hallazgo de seguridad (MEDIO): esto usaba Math.random() — no es un
-// generador criptográficamente seguro, así que la clave temporal era, en
-// teoría, más predecible de lo que su longitud sugiere. Ahora usa
-// crypto.randomInt (CSPRNG de Node) para cada carácter. El formato
-// ("Pv" + 8 alfanuméricos + "!" + 2 dígitos) se mantiene por compatibilidad
-// con la política de contraseña del cliente (letras+símbolo+dígitos), pero
-// con ~8 caracteres realmente aleatorios en vez de 6.
-function generarClaveTemporal() {
-  // Sin caracteres que se confunden al leerlos y teclearlos a mano
-  // (0/O, 1/l/I) — antes una clave bien copiada fallaba por eso.
-  const alfabeto = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let cuerpo = "";
-  for (let i = 0; i < 10; i++) {
-    cuerpo += alfabeto[crypto.randomInt(alfabeto.length)];
-  }
-  const digitos = String(crypto.randomInt(2, 10)) + String(crypto.randomInt(2, 10));
-  return "Pv" + cuerpo + "!" + digitos;
 }
 
 function esPaisBloqueado(pais) {
@@ -152,6 +134,7 @@ async function crearCuentaPrestamista(datos) {
     await registrarAuditoria(client, idNuevo, "Acepto_Terminos_Plataforma", "GestionUsuarios", { fecha: new Date().toISOString() });
 
     await client.query("COMMIT");
+    await fijarCaducidadClaveTemporal(idNuevo);
 
     enviarCorreo({
       to: datos.email,
@@ -301,6 +284,7 @@ async function crearCuentaPrestatario(datos) {
     const estado = await leerEstadoSolicitud(client, idOportunidad);
 
     await client.query("COMMIT");
+    await fijarCaducidadClaveTemporal(idUsuario);
 
     const detalle = textoEstadoSolicitud(idOportunidad, estado);
     enviarCorreo({
@@ -432,6 +416,17 @@ function respuestaRegistroEnviado(email) {
  * consume el token — un enlace usado dos veces la segunda vez dice
  * "ya fue usado", no crea una cuenta duplicada.
  */
+async function consultarRegistroPendiente(token) {
+  const { rows } = await pool.query("SELECT expira_en FROM registros_pendientes WHERE token = $1", [token]);
+  if (!rows[0]) {
+    return { valido: false, mensaje: "Ese enlace de confirmación no es válido o ya fue usado." };
+  }
+  if (new Date(rows[0].expira_en) < new Date()) {
+    return { valido: false, mensaje: "Ese enlace de confirmación venció. Vuelve a registrarte para recibir uno nuevo." };
+  }
+  return { valido: true };
+}
+
 async function completarRegistroPendiente(token) {
   const { rows } = await pool.query("SELECT * FROM registros_pendientes WHERE token = $1", [token]);
   const pendiente = rows[0];
@@ -595,4 +590,5 @@ module.exports = {
   registrarSolicitudPrestamo,
   cancelarSuscripcionUsuario,
   completarRegistroPendiente,
+  consultarRegistroPendiente,
 };
