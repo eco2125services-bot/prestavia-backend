@@ -120,14 +120,14 @@ async function login(email, claveIngresada, ip) {
 // creados, pero sí exige mínimo 8 caracteres con al menos una letra y un
 // número.
 function claveCumplePolitica(clave) {
-  return typeof clave === "string" && clave.length >= 8 && /[a-zA-Z]/.test(clave) && /[0-9]/.test(clave);
+  return typeof clave === "string" && clave.length >= 10 && clave.length <= 128 && /[a-zA-Z]/.test(clave) && /[0-9]/.test(clave);
 }
 
 async function actualizarContrasenaObligatoria(idUsuario, nuevaClave, ip) {
   if (!idUsuario || !claveCumplePolitica(nuevaClave)) {
     return {
       exito: false,
-      mensaje: "La contraseña debe tener mínimo 8 caracteres, con al menos una letra y un número.",
+      mensaje: "La contraseña debe tener entre 10 y 128 caracteres, con al menos una letra y un número.",
     };
   }
 
