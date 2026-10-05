@@ -32,6 +32,9 @@ const restablecerLimiter = rateLimit({
   message: "Demasiados intentos. Intenta de nuevo en unos minutos.",
 });
 
+// Sesión: revalidar al abrir la app y cerrar sesión de verdad (invalida el token).
+router.get("/sesion", requiereAutenticacion, authController.getSesion);
+router.post("/logout", requiereAutenticacion, authController.postLogout);
 router.post("/login", loginLimiter, authController.postLogin);
 router.post("/olvide-clave", olvideLimiter, authController.postOlvideClave);
 router.get("/restablecer", restablecerLimiter, authController.getRestablecer);
