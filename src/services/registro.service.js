@@ -178,6 +178,34 @@ async function registrarPrestamistaNuevo(datos) {
 }
 
 /**
+ * Lee, dentro de la transacción en curso, en qué quedó la solicitud tras la
+ * evaluación automática de riesgo (ia.service.js → evaluarActivoIndividual).
+ */
+async function leerEstadoSolicitud(client, idOportunidad) {
+  const { rows } = await client.query(
+    "SELECT estatus, ltv_preliminar FROM oportunidades_mercado WHERE id_oportunidad = $1",
+    [idOportunidad]
+  );
+  const fila = rows[0];
+  return {
+    rechazada: !!fila && fila.estatus === "Rechazada",
+    ltv: fila && fila.ltv_preliminar !== null ? parseFloat(fila.ltv_preliminar) : null,
+  };
+}
+
+/** Frase que describe el resultado de la solicitud (para pantalla, correo y página de confirmación). */
+function textoEstadoSolicitud(idOportunidad, estado) {
+  if (!estado.rechazada) {
+    return `Tu solicitud ${idOportunidad} fue publicada en el marketplace.`;
+  }
+  return (
+    `Tu solicitud ${idOportunidad} fue evaluada automáticamente y NO fue publicada: el valor del bien declarado es demasiado bajo frente al monto pedido` +
+    (estado.ltv !== null ? ` (LTV ${(estado.ltv * 100).toFixed(1)}%, máximo aceptado ${(LTV_MAXIMO_ACEPTABLE * 100).toFixed(0)}%)` : "") +
+    `. Puedes crear una nueva solicitud con un monto menor o una garantía de mayor valor.`
+  );
+}
+
+/**
  * Crea la cuenta REAL de prestatario (+ su activo en garantía + su
  * solicitud publicada en el marketplace) — antes era todo el cuerpo de
  * registrarPrestatarioNuevo(). Mismo patrón que crearCuentaPrestamista.
@@ -241,12 +269,19 @@ async function crearCuentaPrestatario(datos) {
     await verificarIdentidadIndividual(client, idUsuario);
     await registrarAuditoria(client, idUsuario, "Acepto_Terminos_Plataforma", "GestionUsuarios", { fecha: new Date().toISOString() });
 
+    // Informe de seguridad (E3 / recomendación #8): antes el mensaje decía
+    // siempre "publicada en el marketplace", aunque evaluarActivoIndividual()
+    // (arriba) ya hubiera marcado la solicitud como 'Rechazada' por LTV.
+    // Se relee el estatus final dentro de la misma transacción.
+    const estado = await leerEstadoSolicitud(client, idOportunidad);
+
     await client.query("COMMIT");
 
+    const detalle = textoEstadoSolicitud(idOportunidad, estado);
     enviarCorreo({
       to: datos.email,
       subject: "Tu contraseña temporal de PrestaVía",
-      html: `<p>Hola ${escapeHtml(datos.nombre)},</p><p>Tu cuenta de <strong>prestatario</strong> en PrestaVía ya está creada y tu solicitud ${idOportunidad} fue publicada en el marketplace. Tu contraseña temporal es:</p><p style="font-size:18px;font-family:monospace;background:#f3f3f3;padding:10px;border-radius:6px;">${claveTemporal}</p><p>Inicia sesión con ella en <a href="${FRONTEND_PUBLIC_URL}">${FRONTEND_PUBLIC_URL}</a> — te pedirá cambiarla de inmediato.</p>`,
+      html: `<p>Hola ${escapeHtml(datos.nombre)},</p><p>Tu cuenta de <strong>prestatario</strong> en PrestaVía ya está creada. ${detalle} Tu contraseña temporal es:</p><p style="font-size:18px;font-family:monospace;background:#f3f3f3;padding:10px;border-radius:6px;">${claveTemporal}</p><p>Inicia sesión con ella en <a href="${FRONTEND_PUBLIC_URL}">${FRONTEND_PUBLIC_URL}</a> — te pedirá cambiarla de inmediato.</p>`,
     }).catch(() => {});
 
     return {
@@ -254,7 +289,9 @@ async function crearCuentaPrestatario(datos) {
       idUsuario,
       claveTemporal,
       idOportunidad,
-      mensaje: `🎉 Registro exitoso. Tu solicitud ${idOportunidad} fue publicada en el marketplace.`,
+      solicitudRechazada: estado.rechazada,
+      detalleSolicitud: detalle,
+      mensaje: `🎉 Registro exitoso. ${detalle}`,
     };
   } catch (error) {
     await client.query("ROLLBACK");
