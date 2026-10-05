@@ -31,6 +31,7 @@ const jwt = require("jsonwebtoken");
 const { pool } = require("../db");
 const { registrarAuditoria } = require("./audit.service");
 const { enviarCorreo, correoConfigurado } = require("./email.service");
+const { invalidarSesiones } = require("./sesiones.service");
 const { generarClaveTemporal, fijarCaducidadClaveTemporal, leerCaducidadClaveTemporal } = require("./claves.service");
 
 const BACKEND_PUBLIC_URL = process.env.BACKEND_PUBLIC_URL || "https://prestavia-backend.onrender.com";
@@ -40,7 +41,9 @@ const RECUPERACION_ESPERA_MINUTOS = 2;
 
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || "10", 10);
 const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "12h";
+// Antes 12h. La sesión del navegador ya se cierra a los 5 min de inactividad;
+// 1h es el tope absoluto aunque el usuario no deje de usar la página.
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "1h";
 
 if (!JWT_SECRET) {
   throw new Error("Falta la variable de entorno JWT_SECRET");
@@ -163,6 +166,8 @@ async function actualizarContrasenaObligatoria(idUsuario, nuevaClave, ip) {
     return { exito: false, mensaje: "Usuario no encontrado." };
   }
 
+  // Al cambiar la clave se cierran TODAS las sesiones abiertas (incluida esta).
+  await invalidarSesiones(idUsuario);
   await registrarAuditoria(null, idUsuario, "Contrasena_Actualizada", "Auth", {}, ip);
 
   return { exito: true, mensaje: "Contraseña actualizada correctamente." };
@@ -287,6 +292,7 @@ async function restablecerClaveConToken(token, ip) {
       await client.query("ROLLBACK");
       return { exito: false, mensaje: "No se pudo restablecer la contraseña." };
     }
+    await invalidarSesiones(fila.id_usuario, client);
     await registrarAuditoria(client, fila.id_usuario, "Recuperacion_Completada", "Auth", {}, ip);
     await client.query("COMMIT");
     await fijarCaducidadClaveTemporal(fila.id_usuario);
@@ -308,7 +314,15 @@ async function restablecerClaveConToken(token, ip) {
   }
 }
 
+/** Cierre de sesión real: los tokens emitidos hasta ahora dejan de servir. */
+async function cerrarSesion(idUsuario, ip) {
+  await invalidarSesiones(idUsuario);
+  await registrarAuditoria(null, idUsuario, "Logout", "Auth", {}, ip);
+  return { exito: true };
+}
+
 module.exports = {
+  cerrarSesion,
   login,
   actualizarContrasenaObligatoria,
   esHashBcrypt,
