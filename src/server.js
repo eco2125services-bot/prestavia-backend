@@ -31,17 +31,22 @@ const ORIGENES_PERMITIDOS = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ];
+// Los formularios de los correos (confirmar cuenta, restablecer contraseña)
+// los sirve ESTE mismo backend y el navegador los envía con "Origin: null"
+// (por la política Referrer-Policy: no-referrer de helmet). Solo esas dos
+// rutas POST aceptan ese origen; el token del enlace es el secreto.
+const RUTAS_FORMULARIO_CORREO = ["/auth/restablecer", "/registro/verificar-email"];
 app.use(
-  cors({
-    origin: function (origin, callback) {
-      // Sin header Origin (curl, Postman, llamadas servidor-a-servidor): se
-      // permite — no es el caso que este control intenta frenar (navegador
-      // de un usuario con sesión activa en un sitio que no es el nuestro).
-      if (!origin || ORIGENES_PERMITIDOS.indexOf(origin) !== -1) {
-        return callback(null, true);
-      }
-      return callback(new Error("Origen no permitido por CORS: " + origin));
-    },
+  cors(function (req, callback) {
+    const origin = req.header("Origin");
+    // Sin header Origin (curl, Postman, llamadas servidor-a-servidor): se
+    // permite — no es el caso que este control intenta frenar (navegador
+    // de un usuario con sesión activa en un sitio que no es el nuestro).
+    const esFormularioCorreo = req.method === "POST" && RUTAS_FORMULARIO_CORREO.indexOf(req.path) !== -1;
+    if (!origin || ORIGENES_PERMITIDOS.indexOf(origin) !== -1 || (esFormularioCorreo && origin === "null")) {
+      return callback(null, { origin: true });
+    }
+    return callback(new Error("Origen no permitido por CORS: " + origin));
   })
 );
 // Límite elevado (por defecto son ~100kb): los comprobantes de pago y los
@@ -69,6 +74,9 @@ app.use("/usuarios", usuariosRoutes);
 // Manejador de errores de último recurso — nunca debe filtrar detalles
 // internos al cliente.
 app.use((err, req, res, next) => {
+  if (err && typeof err.message === "string" && err.message.indexOf("Origen no permitido por CORS") === 0) {
+    return res.status(403).json({ exito: false, mensaje: "Origen no permitido." });
+  }
   console.error("Error no manejado:", err);
   if (err && err.type === "entity.too.large") {
     return res.status(413).json({ exito: false, mensaje: "El archivo es demasiado grande. Usa una foto o PDF de menos de 18 MB." });
