@@ -2,6 +2,7 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const { requiereAutenticacion, requiereRol } = require("../middleware/auth");
 const controller = require("../controllers/registro.controller");
+const { requiereCaptcha } = require("../services/captcha.service");
 
 const router = express.Router();
 
@@ -26,8 +27,8 @@ const registroLimiter = rateLimit({
 
 // Registro de cuenta nueva: rutas PÚBLICAS a propósito (todavía no hay
 // sesión que autenticar en el momento de crear la cuenta).
-router.post("/prestamista", registroLimiter, controller.postRegistrarPrestamista);
-router.post("/prestatario", registroLimiter, controller.postRegistrarPrestatario);
+router.post("/prestamista", registroLimiter, requiereCaptcha, controller.postRegistrarPrestamista);
+router.post("/prestatario", registroLimiter, requiereCaptcha, controller.postRegistrarPrestatario);
 
 // También pública (se abre desde el enlace del correo, sin sesión). El
 // token es de 256 bits — fuerza bruta es inviable — pero un límite

@@ -2,6 +2,7 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const authController = require("../controllers/auth.controller");
 const { requiereAutenticacion } = require("../middleware/auth");
+const { requiereCaptcha } = require("../services/captcha.service");
 
 const router = express.Router();
 
@@ -35,8 +36,8 @@ const restablecerLimiter = rateLimit({
 // Sesión: revalidar al abrir la app y cerrar sesión de verdad (invalida el token).
 router.get("/sesion", requiereAutenticacion, authController.getSesion);
 router.post("/logout", requiereAutenticacion, authController.postLogout);
-router.post("/login", loginLimiter, authController.postLogin);
-router.post("/olvide-clave", olvideLimiter, authController.postOlvideClave);
+router.post("/login", loginLimiter, requiereCaptcha, authController.postLogin);
+router.post("/olvide-clave", olvideLimiter, requiereCaptcha, authController.postOlvideClave);
 router.get("/restablecer", restablecerLimiter, authController.getRestablecer);
 router.post("/restablecer", restablecerLimiter, authController.postRestablecer);
 // HALLAZGO DE SEGURIDAD (ALTO) corregido: esta ruta aceptaba {email,
